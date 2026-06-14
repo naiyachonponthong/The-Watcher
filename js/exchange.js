@@ -20,7 +20,7 @@ const Exchange = {
       <div class="page-sub">ค้นหายาที่ต้องการย้าย แล้วเลือกสถานที่ปลายทาง</div>
       <div class="search-wrap">
         <i class="bi bi-search"></i>
-        <input id="exSearch" autocomplete="off" placeholder="ค้นหาชื่อยา, สถานที่, Lot">
+        <input id="exSearch" autocomplete="off" placeholder="ค้นหาชื่อยา, สถานที่, Lot, บาร์โค้ด">
       </div>
       <div id="exList" style="margin-top:14px"></div>
       <div class="section-label">ย้ายล่าสุด</div>

@@ -826,10 +826,13 @@ function apiSearchItems_(query) {
   var q = String(query || '').trim().toLowerCase();
   if (!q) return { status: 'success', data: [] };
   var items = readAll_('Items').filter(function (it) { return it.status === 'active' && Number(it.qty || 0) > 0; });
+  var drugs = readAll_('Drugs');
+  var codeMap = {};
+  drugs.forEach(function (d) { if (d.id) codeMap[d.id] = (d.code || ''); });
   var out = [];
   var imgMap = buildDrugImageMap_();
   items.forEach(function (it) {
-    var hay = ((it.drug_name || '') + ' ' + (it.location_name || '') + ' ' + (it.lot_no || '')).toLowerCase();
+    var hay = ((it.drug_name || '') + ' ' + (it.location_name || '') + ' ' + (it.lot_no || '') + ' ' + (codeMap[it.drug_id] || '')).toLowerCase();
     if (hay.indexOf(q) !== -1) {
       out.push({
         id: it.id, drug_id: it.drug_id, drug_name: it.drug_name, image_url: imgMap[it.drug_id] || '',
