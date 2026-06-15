@@ -12,30 +12,34 @@ const Issue = {
 
   paint() {
     document.getElementById('isBody').innerHTML = `
-      <div class="page-sub">ค้นหายาแล้วเพิ่มเข้าใบเบิก เพิ่มได้หลายรายการต่อใบ · ระบบหักจาก Lot ที่ใกล้หมดอายุก่อนอัตโนมัติ</div>
+      <div class="page-sub">ค้นหายาแล้วแตะเพื่อเพิ่มเข้าใบเบิก เพิ่มได้หลายรายการต่อใบ · ระบบหักจาก Lot ที่ใกล้หมดอายุก่อนให้อัตโนมัติ</div>
 
       <div class="search-wrap">
         <i class="bi bi-search"></i>
         <input id="isSearch" autocomplete="off" placeholder="ค้นหาชื่อยา หรือรหัสยา">
       </div>
-      <div id="isList" style="margin-top:10px"></div>
+      <div id="isList" class="is-results"></div>
 
-      <div class="section-label">รายการที่จะเบิก</div>
+      <div class="section-label" style="display:flex;align-items:center">รายการที่จะเบิก<span id="isCount" class="count-pill" style="display:none">0</span></div>
       <div id="isCart"></div>
 
       <div id="isForm" style="display:none">
-        <div class="section-label">ข้อมูลใบเบิก</div>
-        <div class="field"><label>ผู้เบิก <span style="color:var(--danger)">*</span></label>
-          <input type="text" id="isRequester" autocomplete="off" placeholder="ชื่อ-สกุล ผู้เบิก"></div>
-        <div class="field"><label>ตำแหน่ง</label>
-          <input type="text" id="isPosition" autocomplete="off" placeholder="ตำแหน่งผู้เบิก"></div>
-        <div class="field"><label>หน่วยงาน / ฝ่าย</label>
-          <input type="text" id="isDept" autocomplete="off" placeholder="เช่น OPD, ตึกผู้ป่วยใน"></div>
-        <div class="field"><label>ผู้รับแทน (ถ้ามี)</label>
-          <input type="text" id="isReceiver" autocomplete="off" placeholder="ผู้รับแทนข้าพเจ้า"></div>
-        <div class="field"><label>หมายเหตุ (ถ้ามี)</label>
-          <input type="text" id="isNote" autocomplete="off"></div>
-        <button id="isConfirm" class="btn-brand"><i class="bi bi-file-earmark-text"></i> ออกใบเบิก & พิมพ์</button>
+        <div class="section-label">ข้อมูลผู้เบิก</div>
+        <div class="card-soft" style="padding:16px 16px 4px">
+          <div class="field"><label>ผู้เบิก <span style="color:var(--danger)">*</span></label>
+            <input type="text" id="isRequester" autocomplete="off" placeholder="ชื่อ-สกุล ผู้เบิก"></div>
+          <div class="d-flex gap-2">
+            <div class="field flex-fill"><label>ตำแหน่ง</label>
+              <input type="text" id="isPosition" autocomplete="off" placeholder="ตำแหน่ง"></div>
+            <div class="field flex-fill"><label>หน่วยงาน / ฝ่าย</label>
+              <input type="text" id="isDept" autocomplete="off" placeholder="เช่น OPD"></div>
+          </div>
+          <div class="field"><label>ผู้รับแทน (ถ้ามี)</label>
+            <input type="text" id="isReceiver" autocomplete="off" placeholder="ผู้รับแทนข้าพเจ้า"></div>
+          <div class="field" style="margin-bottom:14px"><label>หมายเหตุ (ถ้ามี)</label>
+            <input type="text" id="isNote" autocomplete="off"></div>
+        </div>
+        <button id="isConfirm" class="btn-brand" style="margin-top:16px"><i class="bi bi-file-earmark-text"></i> ออกใบเบิก & พิมพ์</button>
       </div>
 
       <div class="section-label">เบิกล่าสุด</div>
@@ -57,25 +61,27 @@ const Issue = {
   async search(q) {
     const wrap = document.getElementById('isList');
     if (!wrap) return;
-    wrap.innerHTML = '<div class="hint">กำลังค้นหา...</div>';
+    wrap.innerHTML = '<div class="hint" style="padding:4px 4px 0">กำลังค้นหา...</div>';
     const r = await api('issueSearch', { q }).catch(() => null);
     const list = (r && r.data) || [];
-    if (!list.length) { wrap.innerHTML = '<div class="hint">ไม่พบยาที่มีของในคลัง</div>'; return; }
+    if (!list.length) { wrap.innerHTML = '<div class="hint" style="padding:4px 4px 0">ไม่พบยาที่มีของในคลัง</div>'; return; }
     wrap.innerHTML = list.map(d => {
       const b = expiryBucket(d.min_days);
       const inCart = this.cart.some(x => x.drug_id === d.drug_id);
-      return `<button class="menu-item" data-id="${d.drug_id}" ${inCart ? 'disabled style="opacity:.55"' : ''}>
+      return `<button class="menu-item is-pick ${inCart ? 'added' : ''}" data-id="${d.drug_id}" ${inCart ? 'disabled' : ''}>
         ${drugThumb(d.image_url)}
         <div class="mi-body"><div class="mi-title">${App.esc(d.drug_name)}</div>
-          <div class="mi-desc">คงเหลือ ${d.total}${d.unit ? ' ' + App.esc(d.unit) : ''} · ${d.lots} Lot</div></div>
-        <span class="chip ${b.cls}">${inCart ? 'เพิ่มแล้ว' : b.label}</span>
+          <div class="mi-desc">คงเหลือ <b>${d.total}</b>${d.unit ? ' ' + App.esc(d.unit) : ''} · ${d.lots} Lot</div></div>
+        <span class="chip ${b.cls}">${b.label}</span>
+        <i class="bi ${inCart ? 'bi-check-circle-fill' : 'bi-plus-circle-fill'} is-add-ic"></i>
       </button>`;
     }).join('');
-    wrap.querySelectorAll('.menu-item').forEach(btn => btn.addEventListener('click', () => {
+    wrap.querySelectorAll('.is-pick').forEach(btn => btn.addEventListener('click', () => {
       const d = list.find(x => x.drug_id === btn.dataset.id);
       this.addToCart(d);
       document.getElementById('isSearch').value = '';
       wrap.innerHTML = '';
+      if (navigator.vibrate) navigator.vibrate(15);
     }));
   },
 
@@ -83,7 +89,7 @@ const Issue = {
     if (this.cart.some(x => x.drug_id === d.drug_id)) return;
     this.cart.push({
       drug_id: d.drug_id, drug_name: d.drug_name, unit: d.unit || '',
-      total: d.total, min_days: d.min_days, qty: 1, note: ''
+      total: d.total, min_days: d.min_days, image_url: d.image_url || '', qty: 1, note: ''
     });
     this.renderCart();
   },
@@ -91,48 +97,63 @@ const Issue = {
   renderCart() {
     const wrap = document.getElementById('isCart');
     const form = document.getElementById('isForm');
+    const count = document.getElementById('isCount');
+    const confirm = document.getElementById('isConfirm');
     if (!wrap) return;
+
+    if (count) { count.textContent = this.cart.length; count.style.display = this.cart.length ? 'inline-grid' : 'none'; }
+
     if (!this.cart.length) {
-      wrap.innerHTML = '<div class="hint">ยังไม่มีรายการ — ค้นหาแล้วแตะยาเพื่อเพิ่ม</div>';
+      wrap.innerHTML = `<div class="cart-empty">
+        <i class="bi bi-clipboard-plus"></i>
+        <div>ยังไม่มีรายการ — ค้นหาด้านบนแล้วแตะยาเพื่อเพิ่ม</div></div>`;
       if (form) form.style.display = 'none';
       return;
     }
     if (form) form.style.display = 'block';
-    wrap.innerHTML = this.cart.map(it => `
-      <div class="card-soft" style="padding:12px 14px;margin-bottom:10px">
-        <div class="d-flex justify-content-between align-items-start gap-2">
-          <div style="flex:1;min-width:0">
-            <div style="font-weight:600">${App.esc(it.drug_name)}</div>
-            <div class="hint" style="margin:2px 0 0">คงเหลือ ${it.total}${it.unit ? ' ' + App.esc(it.unit) : ''}</div>
+
+    const totalQty = this.cart.reduce((s, it) => s + (it.qty || 0), 0);
+    wrap.innerHTML = this.cart.map(it => {
+      const b = expiryBucket(it.min_days);
+      return `
+      <div class="cart-item card-soft">
+        <div class="ci-top">
+          ${drugThumb(it.image_url)}
+          <div class="ci-info">
+            <div class="ci-name">${App.esc(it.drug_name)}</div>
+            <div class="ci-meta">คงเหลือ ${it.total}${it.unit ? ' ' + App.esc(it.unit) : ''} <span class="chip ${b.cls}">${b.label}</span></div>
           </div>
-          <button class="btn-ghost is-del" data-id="${it.drug_id}" style="width:auto;background:transparent;color:var(--danger);padding:4px 8px"><i class="bi bi-trash3"></i></button>
+          <button class="ci-del" data-id="${it.drug_id}" aria-label="ลบ"><i class="bi bi-trash3"></i></button>
         </div>
-        <div class="qty-row" style="margin-top:10px">
-          <button type="button" class="qty-btn is-minus" data-id="${it.drug_id}">-</button>
-          <input type="number" class="is-qty" data-id="${it.drug_id}" value="${it.qty}" min="1" max="${it.total}" inputmode="numeric">
-          <span class="qty-unit">/ ${it.total}</span>
-          <button type="button" class="qty-btn is-plus" data-id="${it.drug_id}">+</button>
+        <div class="cart-qty">
+          <span class="cq-label">จำนวนเบิก</span>
+          <div class="qty-row">
+            <button type="button" class="qty-btn is-minus" data-id="${it.drug_id}">-</button>
+            <input type="number" class="is-qty" data-id="${it.drug_id}" value="${it.qty}" min="1" max="${it.total}" inputmode="numeric">
+            <button type="button" class="qty-btn is-plus" data-id="${it.drug_id}">+</button>
+          </div>
         </div>
-      </div>`).join('');
+      </div>`;
+    }).join('') + `
+      <div class="cart-summary"><span>รวมที่จะเบิก</span><span>${this.cart.length} รายการ · ${totalQty} หน่วย</span></div>`;
+
+    if (confirm) confirm.innerHTML = `<i class="bi bi-file-earmark-text"></i> ออกใบเบิก & พิมพ์ (${this.cart.length} รายการ)`;
 
     const find = id => this.cart.find(x => x.drug_id === id);
-    wrap.querySelectorAll('.is-del').forEach(b => b.addEventListener('click', () => {
+    wrap.querySelectorAll('.ci-del').forEach(b => b.addEventListener('click', () => {
       this.cart = this.cart.filter(x => x.drug_id !== b.dataset.id);
       this.renderCart();
     }));
     wrap.querySelectorAll('.is-minus').forEach(b => b.addEventListener('click', () => {
-      const it = find(b.dataset.id); it.qty = Math.max(1, it.qty - 1);
-      wrap.querySelector(`.is-qty[data-id="${it.drug_id}"]`).value = it.qty;
+      const it = find(b.dataset.id); it.qty = Math.max(1, it.qty - 1); this.renderCart();
     }));
     wrap.querySelectorAll('.is-plus').forEach(b => b.addEventListener('click', () => {
-      const it = find(b.dataset.id); it.qty = Math.min(it.total, it.qty + 1);
-      wrap.querySelector(`.is-qty[data-id="${it.drug_id}"]`).value = it.qty;
+      const it = find(b.dataset.id); it.qty = Math.min(it.total, it.qty + 1); this.renderCart();
     }));
     wrap.querySelectorAll('.is-qty').forEach(inp => inp.addEventListener('change', () => {
       const it = find(inp.dataset.id);
       let v = parseInt(inp.value) || 1;
-      v = Math.max(1, Math.min(it.total, v));
-      it.qty = v; inp.value = v;
+      it.qty = Math.max(1, Math.min(it.total, v)); this.renderCart();
     }));
   },
 
@@ -178,12 +199,15 @@ const Issue = {
       const names = Object.keys(s.drugs);
       const summary = names.slice(0, 2).join(', ') + (names.length > 2 ? ' +' + (names.length - 2) : '');
       const when = s.created_at ? new Date(s.created_at).toLocaleString('th-TH', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
-      return `<div class="scan-row">
-        <div style="flex:1;min-width:0">
-          <div style="font-weight:600">${s.slip_no ? 'เลขที่ ' + App.esc(s.slip_no) : 'ใบเบิก'} <span class="hint" style="font-weight:400">· ${names.length} รายการ</span></div>
-          <div class="hint" style="margin:2px 0 0">${App.esc(summary)}${s.requester ? ' · ' + App.esc(s.requester) : ''}${s.department ? ' · ' + App.esc(s.department) : ''} · ${when}</div>
+      const sub = [s.requester, s.department, when].filter(Boolean).map(App.esc).join(' · ');
+      return `<div class="issue-row">
+        <div class="ir-ic"><i class="bi bi-box-arrow-right"></i></div>
+        <div class="ir-body">
+          <div class="ir-title">${s.slip_no ? 'เลขที่ ' + App.esc(s.slip_no) : 'ใบเบิก'} <span class="ir-count">${names.length} รายการ</span></div>
+          <div class="ir-sub">${App.esc(summary)}</div>
+          <div class="ir-sub">${sub}</div>
         </div>
-        ${s.slip_no ? `<button class="btn-ghost is-print" data-slip="${App.esc(s.slip_no)}" style="width:auto;padding:6px 10px"><i class="bi bi-printer"></i></button>` : ''}
+        ${s.slip_no ? `<button class="ir-print is-print" data-slip="${App.esc(s.slip_no)}" aria-label="พิมพ์"><i class="bi bi-printer"></i></button>` : ''}
       </div>`;
     }).join('');
   },
