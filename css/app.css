@@ -202,7 +202,7 @@ body {
   padding-bottom: var(--safe-b);
   background: var(--card);
   border-top: 1px solid var(--line-soft);
-  display: grid; grid-template-columns: repeat(5, 1fr); align-items: center;
+  display: grid; grid-template-columns: repeat(6, 1fr); align-items: center;
   box-shadow: 0 -4px 20px oklch(0.4 0.06 283 / 0.10);
 }
 #bottomNav .nav-btn {

@@ -116,6 +116,11 @@ function route_(action, p) {
     case 'exchangeItem':     return guard_(p, ['exchange'], function (u) { return apiExchangeItem_(p, u); });
     case 'recentExchanges':  return guard_(p, ['view'],     function ()  { return apiRecentExchanges_(p.limit || 20); });
 
+    // ---- ใบเบิก / issue (stock-out, FIFO) ----
+    case 'issueSearch':      return guard_(p, ['view'],    function ()  { return apiIssueSearch_(p.q); });
+    case 'issueItem':        return guard_(p, ['receive'], function (u) { return apiIssueItem_(p, u); });
+    case 'recentIssues':     return guard_(p, ['view'],    function ()  { return apiRecentIssues_(p.limit || 20); });
+
     // ---- Part 6: notifications + account ----
     case 'getNotifyConfig':  return guard_(p, ['*'],    function ()  { return apiGetNotifyConfig_(); });
     case 'saveNotifyConfig': return guard_(p, ['*'],    function ()  { return apiSaveNotifyConfig_(p.notification); });
@@ -956,6 +961,108 @@ function apiRecentExchanges_(limit) {
   return { status: 'success', data: tx.slice(0, limit).map(stripMeta_) };
 }
 
+// ============================================================ ใบเบิก / ISSUE (stock-out, FIFO ใกล้หมดอายุก่อน)
+// ค้นหายาแบบรวมยอดคงเหลือทุก Lot/ทุกจุด เพื่อให้เลือกเบิกในระดับ "ยา"
+function apiIssueSearch_(query) {
+  var q = String(query || '').trim().toLowerCase();
+  if (!q) return { status: 'success', data: [] };
+  var items = readAll_('Items').filter(function (it) { return it.status === 'active' && Number(it.qty || 0) > 0; });
+  var dmap = {};
+  readAll_('Drugs').forEach(function (d) { if (d.id) dmap[d.id] = d; });
+  var imgMap = buildDrugImageMap_();
+  var agg = {};
+  items.forEach(function (it) {
+    var d = dmap[it.drug_id] || {};
+    var hay = ((it.drug_name || '') + ' ' + (d.code || '')).toLowerCase();
+    if (hay.indexOf(q) === -1) return;
+    var k = it.drug_id;
+    if (!agg[k]) agg[k] = {
+      drug_id: it.drug_id, drug_name: it.drug_name, image_url: imgMap[it.drug_id] || '',
+      unit: d.unit || '', code: d.code || '', total: 0, lots: 0, min_days: null
+    };
+    agg[k].total += Number(it.qty || 0);
+    agg[k].lots++;
+    var days = daysTo_(it.expiry_date);
+    if (days != null && (agg[k].min_days == null || days < agg[k].min_days)) agg[k].min_days = days;
+  });
+  var out = Object.keys(agg).map(function (k) { return agg[k]; });
+  out.sort(function (a, b) { return (a.min_days == null ? 1e9 : a.min_days) - (b.min_days == null ? 1e9 : b.min_days); });
+  return { status: 'success', data: out.slice(0, 60) };
+}
+
+// เบิกออกระดับยา: หักจาก Lot ที่ใกล้หมดอายุก่อน (FIFO) ข้ามจุดได้ บันทึก 1 transaction ต่อ Lot ที่ถูกตัด
+function apiIssueItem_(p, user) {
+  var lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(15000);
+
+    var drug = findById_('Drugs', p.drug_id);
+    if (!drug) return { status: 'error', message: 'ไม่พบยา' };
+
+    var qty = Number(p.qty);
+    if (!qty || qty <= 0) return { status: 'error', message: 'จำนวนต้องมากกว่า 0' };
+
+    var requester = String(p.requester || '').trim();
+    if (!requester) return { status: 'error', message: 'กรุณาระบุผู้เบิก' };
+    var department = String(p.department || '').trim();
+    var note = String(p.note || '').trim();
+
+    var lots = readAll_('Items').filter(function (it) {
+      return it.status === 'active' && it.drug_id === drug.id && Number(it.qty || 0) > 0;
+    });
+    var total = lots.reduce(function (s, it) { return s + Number(it.qty || 0); }, 0);
+    if (qty > total) return { status: 'error', message: 'จำนวนเกินกว่าที่มี (คงเหลือ ' + total + ')' };
+
+    // FIFO: ใกล้หมดอายุก่อน, เสมอกันใช้ของที่รับเข้าก่อน
+    lots.sort(function (a, b) {
+      var da = daysTo_(a.expiry_date), db = daysTo_(b.expiry_date);
+      da = (da == null ? 1e9 : da); db = (db == null ? 1e9 : db);
+      if (da !== db) return da - db;
+      return String(a.created_at || '').localeCompare(String(b.created_at || ''));
+    });
+
+    var remain = qty, consumed = [], ts = now_();
+    for (var i = 0; i < lots.length && remain > 0; i++) {
+      var it = lots[i];
+      var take = Math.min(remain, Number(it.qty || 0));
+      it.qty = Number(it.qty || 0) - take;
+      if (it.qty <= 0) { it.qty = 0; it.status = 'used'; }
+      it.updated_at = ts;
+      updateRecord_('Items', it.id, it);
+
+      appendRecord_('Transactions', {
+        id: Utilities.getUuid(), type: 'issue', item_id: it.id,
+        drug_id: drug.id, drug_name: drug.name,
+        from_location_id: it.location_id, from_location_name: it.location_name,
+        to_location_id: '', to_location_name: department,
+        qty: take, lot_no: it.lot_no, expiry_date: it.expiry_date,
+        reason: 'เบิก', requester: requester, department: department, note: note,
+        by: user.username, created_at: ts
+      });
+      consumed.push({ location_name: it.location_name, lot_no: it.lot_no || '', expiry_date: it.expiry_date, qty: take });
+      remain -= take;
+    }
+
+    return {
+      status: 'success',
+      message: 'เบิก ' + drug.name + ' ' + qty + (drug.unit ? ' ' + drug.unit : '') + ' แล้ว',
+      consumed: consumed
+    };
+  } catch (e) {
+    logError_('issueItem', e);
+    return { status: 'error', message: 'เบิกไม่สำเร็จ ลองอีกครั้ง' };
+  } finally {
+    try { lock.releaseLock(); } catch (_) {}
+  }
+}
+
+function apiRecentIssues_(limit) {
+  var tx = readAll_('Transactions').filter(function (t) { return t.type === 'issue'; });
+  tx.sort(function (a, b) { return String(b.created_at || '').localeCompare(String(a.created_at || '')); });
+  var imgMap = buildDrugImageMap_();
+  return { status: 'success', data: tx.slice(0, limit).map(function (t) { var o = stripMeta_(t); o.image_url = imgMap[t.drug_id] || ''; return o; }) };
+}
+
 // ============================================================ NOTIFICATIONS (Part 6)
 function apiGetNotifyConfig_() {
   var n = readConfig_().notification || {};
@@ -1122,7 +1229,7 @@ function apiExportData_(p) {
       rows.push([it.drug_name, it.location_name, it.lot_no || '', it.expiry_date || '', daysTo_(it.expiry_date), Number(it.qty || 0), it.received_by || '', it.received_at ? localDate(it.received_at) : '']);
     });
   } else {
-    var types = (kind === 'receive') ? ['receive'] : ['receive', 'exchange', 'dispose', 'adjust'];
+    var types = (kind === 'receive') ? ['receive'] : ['receive', 'exchange', 'issue', 'dispose', 'adjust'];
     columns = (kind === 'receive')
       ? ['วันที่', 'เวลา', 'ยา', 'สถานที่', 'Lot No.', 'วันหมดอายุ', 'จำนวน', 'โดย']
       : ['วันที่', 'เวลา', 'ประเภท', 'ยา', 'จาก', 'ไป', 'Lot No.', 'วันหมดอายุ', 'จำนวน', 'เหตุผล', 'โดย'];
@@ -1135,8 +1242,12 @@ function apiExportData_(p) {
       if (kind === 'receive') {
         rows.push([d, tm, t.drug_name, t.to_location_name || '', t.lot_no || '', t.expiry_date || '', Number(t.qty || 0), t.by || '']);
       } else {
-        var label = t.type === 'receive' ? 'รับเข้า' : (t.type === 'exchange' ? 'ย้าย/แลก' : (t.type === 'dispose' ? 'ตัดจ่าย/ทิ้ง' : (t.type === 'adjust' ? 'ปรับยอด' : t.type)));
-        rows.push([d, tm, label, t.drug_name, t.from_location_name || '', t.to_location_name || '', t.lot_no || '', t.expiry_date || '', Number(t.qty || 0), t.reason || '', t.by || '']);
+        var label = t.type === 'receive' ? 'รับเข้า' : (t.type === 'exchange' ? 'ย้าย/แลก' : (t.type === 'issue' ? 'เบิก' : (t.type === 'dispose' ? 'ตัดจ่าย/ทิ้ง' : (t.type === 'adjust' ? 'ปรับยอด' : t.type))));
+        var reasonCell = t.reason || '';
+        if (t.type === 'issue') {
+          reasonCell = 'ผู้เบิก: ' + (t.requester || '-') + (t.department ? ' · หน่วยงาน: ' + t.department : '') + (t.note ? ' · ' + t.note : '');
+        }
+        rows.push([d, tm, label, t.drug_name, t.from_location_name || '', t.to_location_name || '', t.lot_no || '', t.expiry_date || '', Number(t.qty || 0), reasonCell, t.by || '']);
       }
     });
   }

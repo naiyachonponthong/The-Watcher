@@ -134,7 +134,7 @@ const App = {
     const view = document.getElementById('view');
     const map = {
       home: viewHome, locations: viewLocations, receive: viewReceive,
-      exchange: viewExchange, settings: () => Settings.render(view)
+      issue: viewIssue, exchange: viewExchange, settings: () => Settings.render(view)
     };
     (map[tab] || viewHome)(view);
     window.scrollTo(0, 0);
