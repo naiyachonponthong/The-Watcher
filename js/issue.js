@@ -1,25 +1,43 @@
-/* issue.js - ใบเบิก: เบิกยาออกจากคลัง (หัก Lot อัตโนมัติแบบ FIFO ใกล้หมดอายุก่อน) */
+/* issue.js - ใบเบิก: ออกใบเบิกหลายรายการต่อใบ (FIFO ใกล้หมดอายุก่อน) + พิมพ์ฟอร์มราชการ */
 const Issue = {
-  _view: null, _recent: [], selected: null, _timer: null,
+  _view: null, _recent: [], cart: [], _timer: null,
 
   async render(view) {
-    this._view = view; this.selected = null;
+    this._view = view;
     view.innerHTML = `<div class="page-title">ใบเบิก</div><div id="isBody">${App.loader()}</div>`;
-
-    const rx = await api('recentIssues', { limit: 15 }).catch(() => null);
+    const rx = await api('recentIssues', { limit: 30 }).catch(() => null);
     this._recent = (rx && rx.data) || [];
-    this.paintPick();
+    this.paint();
   },
 
-  /* ---------- เลือกยาที่จะเบิก ---------- */
-  paintPick() {
+  paint() {
     document.getElementById('isBody').innerHTML = `
-      <div class="page-sub">ค้นหายาที่ต้องการเบิก ระบบจะหักจาก Lot ที่ใกล้หมดอายุก่อนให้อัตโนมัติ</div>
+      <div class="page-sub">ค้นหายาแล้วเพิ่มเข้าใบเบิก เพิ่มได้หลายรายการต่อใบ · ระบบหักจาก Lot ที่ใกล้หมดอายุก่อนอัตโนมัติ</div>
+
       <div class="search-wrap">
         <i class="bi bi-search"></i>
         <input id="isSearch" autocomplete="off" placeholder="ค้นหาชื่อยา หรือรหัสยา">
       </div>
-      <div id="isList" style="margin-top:14px"></div>
+      <div id="isList" style="margin-top:10px"></div>
+
+      <div class="section-label">รายการที่จะเบิก</div>
+      <div id="isCart"></div>
+
+      <div id="isForm" style="display:none">
+        <div class="section-label">ข้อมูลใบเบิก</div>
+        <div class="field"><label>ผู้เบิก <span style="color:var(--danger)">*</span></label>
+          <input type="text" id="isRequester" autocomplete="off" placeholder="ชื่อ-สกุล ผู้เบิก"></div>
+        <div class="field"><label>ตำแหน่ง</label>
+          <input type="text" id="isPosition" autocomplete="off" placeholder="ตำแหน่งผู้เบิก"></div>
+        <div class="field"><label>หน่วยงาน / ฝ่าย</label>
+          <input type="text" id="isDept" autocomplete="off" placeholder="เช่น OPD, ตึกผู้ป่วยใน"></div>
+        <div class="field"><label>ผู้รับแทน (ถ้ามี)</label>
+          <input type="text" id="isReceiver" autocomplete="off" placeholder="ผู้รับแทนข้าพเจ้า"></div>
+        <div class="field"><label>หมายเหตุ (ถ้ามี)</label>
+          <input type="text" id="isNote" autocomplete="off"></div>
+        <button id="isConfirm" class="btn-brand"><i class="bi bi-file-earmark-text"></i> ออกใบเบิก & พิมพ์</button>
+      </div>
+
       <div class="section-label">เบิกล่าสุด</div>
       <div id="isRecent">${this._recent.length ? this.recentHtml() : '<div class="hint">ยังไม่มีรายการ</div>'}</div>`;
 
@@ -30,6 +48,10 @@ const Issue = {
       if (!q) { document.getElementById('isList').innerHTML = ''; return; }
       this._timer = setTimeout(() => this.search(q), 300);
     });
+
+    document.getElementById('isConfirm').addEventListener('click', (e) => this.confirm(e.currentTarget));
+    this.bindRecent();
+    this.renderCart();
   },
 
   async search(q) {
@@ -41,91 +63,230 @@ const Issue = {
     if (!list.length) { wrap.innerHTML = '<div class="hint">ไม่พบยาที่มีของในคลัง</div>'; return; }
     wrap.innerHTML = list.map(d => {
       const b = expiryBucket(d.min_days);
-      return `<button class="menu-item" data-id="${d.drug_id}">
+      const inCart = this.cart.some(x => x.drug_id === d.drug_id);
+      return `<button class="menu-item" data-id="${d.drug_id}" ${inCart ? 'disabled style="opacity:.55"' : ''}>
         ${drugThumb(d.image_url)}
         <div class="mi-body"><div class="mi-title">${App.esc(d.drug_name)}</div>
           <div class="mi-desc">คงเหลือ ${d.total}${d.unit ? ' ' + App.esc(d.unit) : ''} · ${d.lots} Lot</div></div>
-        <span class="chip ${b.cls}">${b.label}</span>
+        <span class="chip ${b.cls}">${inCart ? 'เพิ่มแล้ว' : b.label}</span>
       </button>`;
     }).join('');
     wrap.querySelectorAll('.menu-item').forEach(btn => btn.addEventListener('click', () => {
       const d = list.find(x => x.drug_id === btn.dataset.id);
-      this.start(d);
+      this.addToCart(d);
+      document.getElementById('isSearch').value = '';
+      wrap.innerHTML = '';
     }));
   },
 
-  /* ---------- ฟอร์มเบิก ---------- */
-  start(drug) {
-    this.selected = drug;
-    const b = expiryBucket(drug.min_days);
+  addToCart(d) {
+    if (this.cart.some(x => x.drug_id === d.drug_id)) return;
+    this.cart.push({
+      drug_id: d.drug_id, drug_name: d.drug_name, unit: d.unit || '',
+      total: d.total, min_days: d.min_days, qty: 1, note: ''
+    });
+    this.renderCart();
+  },
 
-    document.getElementById('isBody').innerHTML = `
-      <button class="btn-ghost" style="width:auto;margin-bottom:16px" id="isBack"><i class="bi bi-chevron-left"></i> กลับ</button>
-
-      <div class="card-soft" style="padding:14px 16px;margin-bottom:18px">
-        <div class="d-flex align-items-start gap-2">
-          ${drugThumb(drug.image_url)}
-          <div style="flex:1;min-width:0"><div style="font-weight:600">${App.esc(drug.drug_name)}</div>
-            <div class="hint" style="margin:2px 0 0">คงเหลือรวม ${drug.total}${drug.unit ? ' ' + App.esc(drug.unit) : ''} · ${drug.lots} Lot</div></div>
-          <span class="chip ${b.cls}">${b.label}</span>
+  renderCart() {
+    const wrap = document.getElementById('isCart');
+    const form = document.getElementById('isForm');
+    if (!wrap) return;
+    if (!this.cart.length) {
+      wrap.innerHTML = '<div class="hint">ยังไม่มีรายการ — ค้นหาแล้วแตะยาเพื่อเพิ่ม</div>';
+      if (form) form.style.display = 'none';
+      return;
+    }
+    if (form) form.style.display = 'block';
+    wrap.innerHTML = this.cart.map(it => `
+      <div class="card-soft" style="padding:12px 14px;margin-bottom:10px">
+        <div class="d-flex justify-content-between align-items-start gap-2">
+          <div style="flex:1;min-width:0">
+            <div style="font-weight:600">${App.esc(it.drug_name)}</div>
+            <div class="hint" style="margin:2px 0 0">คงเหลือ ${it.total}${it.unit ? ' ' + App.esc(it.unit) : ''}</div>
+          </div>
+          <button class="btn-ghost is-del" data-id="${it.drug_id}" style="width:auto;background:transparent;color:var(--danger);padding:4px 8px"><i class="bi bi-trash3"></i></button>
         </div>
-      </div>
+        <div class="qty-row" style="margin-top:10px">
+          <button type="button" class="qty-btn is-minus" data-id="${it.drug_id}">-</button>
+          <input type="number" class="is-qty" data-id="${it.drug_id}" value="${it.qty}" min="1" max="${it.total}" inputmode="numeric">
+          <span class="qty-unit">/ ${it.total}</span>
+          <button type="button" class="qty-btn is-plus" data-id="${it.drug_id}">+</button>
+        </div>
+      </div>`).join('');
 
-      <div class="field"><label>จำนวนที่เบิก <span style="color:var(--danger)">*</span></label>
-        <div class="qty-row">
-          <button type="button" class="qty-btn" id="isMinus">-</button>
-          <input type="number" id="isQty" value="1" min="1" max="${drug.total}" inputmode="numeric">
-          <span class="qty-unit">/ ${drug.total}</span>
-          <button type="button" class="qty-btn" id="isPlus">+</button>
-        </div></div>
-
-      <div class="field"><label>ผู้เบิก <span style="color:var(--danger)">*</span></label>
-        <input type="text" id="isRequester" autocomplete="off" placeholder="ชื่อผู้เบิก"></div>
-
-      <div class="field"><label>หน่วยงาน / ปลายทาง</label>
-        <input type="text" id="isDept" autocomplete="off" placeholder="เช่น OPD, ตึกผู้ป่วยใน"></div>
-
-      <div class="field"><label>หมายเหตุ (ถ้ามี)</label><input type="text" id="isNote" autocomplete="off"></div>
-
-      <button id="isConfirm" class="btn-brand"><i class="bi bi-box-arrow-right"></i> ยืนยันการเบิก</button>`;
-
-    document.getElementById('isBack').addEventListener('click', () => this.paintPick());
-    const q = document.getElementById('isQty');
-    document.getElementById('isMinus').addEventListener('click', () => { q.value = Math.max(1, (parseInt(q.value) || 1) - 1); });
-    document.getElementById('isPlus').addEventListener('click', () => { q.value = Math.min(drug.total, (parseInt(q.value) || 0) + 1); });
-    document.getElementById('isConfirm').addEventListener('click', (e) => this.confirm(e.currentTarget));
+    const find = id => this.cart.find(x => x.drug_id === id);
+    wrap.querySelectorAll('.is-del').forEach(b => b.addEventListener('click', () => {
+      this.cart = this.cart.filter(x => x.drug_id !== b.dataset.id);
+      this.renderCart();
+    }));
+    wrap.querySelectorAll('.is-minus').forEach(b => b.addEventListener('click', () => {
+      const it = find(b.dataset.id); it.qty = Math.max(1, it.qty - 1);
+      wrap.querySelector(`.is-qty[data-id="${it.drug_id}"]`).value = it.qty;
+    }));
+    wrap.querySelectorAll('.is-plus').forEach(b => b.addEventListener('click', () => {
+      const it = find(b.dataset.id); it.qty = Math.min(it.total, it.qty + 1);
+      wrap.querySelector(`.is-qty[data-id="${it.drug_id}"]`).value = it.qty;
+    }));
+    wrap.querySelectorAll('.is-qty').forEach(inp => inp.addEventListener('change', () => {
+      const it = find(inp.dataset.id);
+      let v = parseInt(inp.value) || 1;
+      v = Math.max(1, Math.min(it.total, v));
+      it.qty = v; inp.value = v;
+    }));
   },
 
   async confirm(btn) {
-    const drug = this.selected;
-    const qty = parseInt(document.getElementById('isQty').value) || 0;
+    if (!this.cart.length) { App.toast('ยังไม่ได้เลือกยา', 'err'); return; }
     const requester = document.getElementById('isRequester').value.trim();
-    const department = document.getElementById('isDept').value.trim();
-    const note = document.getElementById('isNote').value.trim();
-    if (qty <= 0 || qty > drug.total) { App.invalid('isQty', 'จำนวนไม่ถูกต้อง'); return; }
     if (!requester) { App.invalid('isRequester', 'กรุณาระบุผู้เบิก'); return; }
+    const payload = {
+      requester,
+      position: document.getElementById('isPosition').value.trim(),
+      department: document.getElementById('isDept').value.trim(),
+      receiver: document.getElementById('isReceiver').value.trim(),
+      note: document.getElementById('isNote').value.trim(),
+      items: this.cart.map(it => ({ drug_id: it.drug_id, qty: it.qty, note: it.note || '' }))
+    };
 
     btn.disabled = true; btn.innerHTML = '<span class="spin"></span>';
-    const r = await api('issueItem', { drug_id: drug.drug_id, qty, requester, department, note }).catch(() => null);
-    btn.disabled = false; btn.innerHTML = '<i class="bi bi-box-arrow-right"></i> ยืนยันการเบิก';
+    const r = await api('issueSlip', payload).catch(() => null);
+    btn.disabled = false; btn.innerHTML = '<i class="bi bi-file-earmark-text"></i> ออกใบเบิก & พิมพ์';
     if (r && r.status === 'success') {
       App.toast(r.message, 'ok');
       if (navigator.vibrate) navigator.vibrate(40);
-      this.selected = null;
+      this.cart = [];
+      this.printSlip(r.slip_no);
       this.render(this._view);
-    } else App.toast((r && r.message) || 'เบิกไม่สำเร็จ', 'err');
+    } else App.toast((r && r.message) || 'ออกใบเบิกไม่สำเร็จ', 'err');
+  },
+
+  /* ---------- เบิกล่าสุด (รวมเป็นใบ ตามเลขที่) ---------- */
+  groupedRecent() {
+    const map = {};
+    const order = [];
+    this._recent.forEach(t => {
+      const key = t.slip_no || ('_' + t.id);
+      if (!map[key]) { map[key] = { slip_no: t.slip_no || '', requester: t.requester || '', department: t.department || '', created_at: t.created_at, drugs: {} }; order.push(key); }
+      map[key].drugs[t.drug_name] = (map[key].drugs[t.drug_name] || 0) + Number(t.qty || 0);
+    });
+    return order.map(k => map[k]);
   },
 
   recentHtml() {
-    return this._recent.map(t => `
-      <div class="scan-row">
-        ${drugThumb(t.image_url)}
+    return this.groupedRecent().map(s => {
+      const names = Object.keys(s.drugs);
+      const summary = names.slice(0, 2).join(', ') + (names.length > 2 ? ' +' + (names.length - 2) : '');
+      const when = s.created_at ? new Date(s.created_at).toLocaleString('th-TH', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
+      return `<div class="scan-row">
         <div style="flex:1;min-width:0">
-          <div style="font-weight:600">${App.esc(t.drug_name)}</div>
-          <div class="hint" style="margin:2px 0 0">${App.esc(t.requester || '')}${t.department ? ' · ' + App.esc(t.department) : ''}${t.from_location_name ? ' · จาก ' + App.esc(t.from_location_name) : ''}</div>
+          <div style="font-weight:600">${s.slip_no ? 'เลขที่ ' + App.esc(s.slip_no) : 'ใบเบิก'} <span class="hint" style="font-weight:400">· ${names.length} รายการ</span></div>
+          <div class="hint" style="margin:2px 0 0">${App.esc(summary)}${s.requester ? ' · ' + App.esc(s.requester) : ''}${s.department ? ' · ' + App.esc(s.department) : ''} · ${when}</div>
         </div>
-        <div class="num" style="color:var(--danger)">-${t.qty}</div>
-      </div>`).join('');
+        ${s.slip_no ? `<button class="btn-ghost is-print" data-slip="${App.esc(s.slip_no)}" style="width:auto;padding:6px 10px"><i class="bi bi-printer"></i></button>` : ''}
+      </div>`;
+    }).join('');
+  },
+
+  bindRecent() {
+    document.querySelectorAll('#isRecent .is-print').forEach(b =>
+      b.addEventListener('click', () => this.printSlip(b.dataset.slip)));
+  },
+
+  /* ---------- พิมพ์ใบเบิก (ฟอร์ม A4) ---------- */
+  async printSlip(slipNo) {
+    App.showLoading('กำลังเตรียมใบเบิก');
+    const r = await api('getIssueSlip', { slip_no: slipNo }).catch(() => null);
+    App.hideLoading();
+    if (!r || r.status !== 'success') { App.toast((r && r.message) || 'เปิดใบเบิกไม่สำเร็จ', 'err'); return; }
+    this.renderPrint(r.slip, r.form || {}, r.hospital_name || (App.branding && App.branding.hospital_name) || '');
+  },
+
+  renderPrint(slip, form, hospital) {
+    const esc = App.esc;
+    const dot = (w) => `<span style="display:inline-block;border-bottom:1px dotted #000;min-width:${w}"></span>`;
+    const lines = slip.lines || [];
+    const MIN_ROWS = 12;
+    const dateStr = slip.date ? new Date(slip.date).toLocaleDateString('th-TH', { day: 'numeric', month: 'long', year: 'numeric' }) : '';
+
+    let rows = lines.map((l, i) => `<tr>
+      <td class="c">${i + 1}</td>
+      <td>${esc(l.drug_name)}</td>
+      <td class="c">${l.max_qty || ''}</td>
+      <td class="c">${l.min_qty || ''}</td>
+      <td class="c">${l.remaining}</td>
+      <td class="c">${esc(l.unit || '')}</td>
+      <td class="c">${l.issued}</td>
+      <td class="c"></td>
+      <td>${esc(l.note || '')}</td>
+    </tr>`).join('');
+    for (let i = lines.length; i < MIN_ROWS; i++) {
+      rows += `<tr><td class="c">${i + 1}</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>`;
+    }
+
+    const sigBlock = (role, name, position) => `
+      <div class="sig">
+        <div>ลงชื่อ${dot('150px')}${role}</div>
+        <div class="ct">( ${name ? esc(name) : dot('150px')} )</div>
+        <div class="ct">ตำแหน่ง ${position ? esc(position).replace(/\n/g, '<br>') : dot('150px')}</div>
+      </div>`;
+
+    const title = form.title || 'ใบเบิกเวชภัณฑ์ยาและเวชภัณฑ์มิใช่ยา';
+    const orgUnit = form.org_unit || (hospital ? 'งานคลังเวชภัณฑ์' + hospital : 'งานคลังเวชภัณฑ์');
+    const fromUnit = form.from_unit || hospital || '';
+
+    const w = window.open('', '_blank');
+    if (!w) { App.toast('เบราว์เซอร์บล็อกหน้าต่างพิมพ์ กรุณาอนุญาต popup', 'err'); return; }
+    w.document.write(`<!doctype html><html lang="th"><head><meta charset="utf-8"><title>ใบเบิก ${esc(slip.slip_no)}</title>
+      <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600&display=swap" rel="stylesheet">
+      <style>
+        @page { size:A4; margin:14mm; }
+        * { box-sizing:border-box; }
+        body { font-family:'Sarabun',sans-serif; color:#000; font-size:14px; }
+        .center { text-align:center; }
+        h1 { font-size:16px; margin:0; }
+        h2 { font-size:14px; font-weight:600; margin:2px 0 12px; }
+        .head-row { display:flex; justify-content:space-between; gap:16px; margin:6px 0; }
+        .mt { margin-top:10px; line-height:2; }
+        table { width:100%; border-collapse:collapse; font-size:13px; margin-top:8px; }
+        th,td { border:1px solid #000; padding:3px 5px; vertical-align:top; }
+        th { text-align:center; font-weight:600; }
+        td.c { text-align:center; }
+        .sigs { display:flex; flex-wrap:wrap; margin-top:22px; }
+        .sig { width:50%; line-height:2.1; margin-bottom:14px; }
+        .sig .ct { text-align:center; padding-right:40px; }
+      </style></head><body>
+      <div class="center"><h1>${esc(title)}</h1><h2>${esc(orgUnit)}</h2></div>
+      <div class="head-row">
+        <div>จากหน่วยงาน ${esc(fromUnit) || dot('200px')}</div>
+        <div>ใบเบิกเลขที่ ${esc(slip.slip_no)}</div>
+      </div>
+      <div>ถึง ${esc(form.to_label || 'หัวหน้าหน่วยพัสดุ')}</div>
+      <div class="mt">
+        ข้าพเจ้า ${slip.requester ? esc(slip.requester) : dot('220px')} ตำแหน่ง ${slip.position ? esc(slip.position) : dot('220px')}<br>
+        ขอเบิกพัสดุเพื่อใช้ในงาน/ฝ่าย ${slip.department ? esc(slip.department) : dot('180px')} และมอบให้ ${slip.receiver ? esc(slip.receiver) : dot('180px')} เป็นผู้รับแทนข้าพเจ้า
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th rowspan="2">ลำดับ</th><th rowspan="2">รายการ</th>
+            <th>จำนวน</th><th>จำนวน</th><th rowspan="2">คงเหลือ</th><th rowspan="2">หน่วยนับ</th>
+            <th colspan="2">จำนวน</th><th rowspan="2">หมายเหตุ</th>
+          </tr>
+          <tr><th>สูงสุด</th><th>ต่ำสุด</th><th>เบิก</th><th>จ่าย</th></tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <div class="sigs">
+        ${sigBlock('ผู้เบิก', '', '')}
+        ${sigBlock('ผู้จ่าย', form.issuer_name, form.issuer_position)}
+        ${sigBlock('ผู้สั่งจ่าย', form.approver_name, form.approver_position)}
+        ${sigBlock('ผู้รับ', '', '')}
+      </div>
+      <div class="center" style="margin-top:6px;font-size:12px;color:#444">วันที่เบิก ${esc(dateStr)}</div>
+      <script>window.onload=function(){setTimeout(function(){window.print();},400);}<\/script>
+      </body></html>`);
+    w.document.close();
   }
 };
 

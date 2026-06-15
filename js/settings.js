@@ -78,6 +78,14 @@ const Settings = {
       </button>
 
       ${(App.user && (App.user.permissions || []).some(x => x === '*' || x === 'stock')) ? `
+      <button class="menu-item" data-act="issueform">
+        <div class="mi-icon c-violet"><i class="bi bi-file-earmark-text-fill"></i></div>
+        <div class="mi-body"><div class="mi-title">ตั้งค่าใบเบิก</div>
+          <div class="mi-desc">หัวกระดาษและผู้ลงนามในใบเบิก</div></div>
+        <i class="bi bi-chevron-right mi-arrow"></i>
+      </button>` : ''}
+
+      ${(App.user && (App.user.permissions || []).some(x => x === '*' || x === 'stock')) ? `
       <button class="menu-item" data-act="audit">
         <div class="mi-icon c-teal"><i class="bi bi-clipboard-check-fill"></i></div>
         <div class="mi-body"><div class="mi-title">ตรวจนับสต็อก</div>
@@ -118,6 +126,7 @@ const Settings = {
         else if (act === 'export') Export.screen(view);
         else if (act === 'history') this.history(view);
         else if (act === 'report') this.report(view);
+        else if (act === 'issueform') this.issueSettings(view);
         else if (act === 'audit') this.audit(view);
         else if (act === 'display') this.display(view);
         else if (act === 'users') this.users(view);
@@ -351,11 +360,12 @@ const Settings = {
     const sections = [
       { ic: 'bi-info-circle-fill', t: 'ภาพรวมระบบ', h: `
         <p>The Watcher ช่วยติดตามยาคงคลังแยกตาม <b>สถานที่เก็บ</b> <b>เลขล็อต (Lot)</b> และ <b>วันหมดอายุ</b> พร้อมเตือนยาที่ใกล้หมดอายุล่วงหน้า</p>
-        <p>เมนูหลักอยู่แถบล่าง (บนคอมจะอยู่ด้านซ้าย) มี 5 ส่วน:</p>
+        <p>เมนูหลักอยู่แถบล่าง (บนคอมจะอยู่ด้านซ้าย) มี 6 ส่วน:</p>
         <ul>
           <li><b>หน้าหลัก</b> สรุปยาใกล้หมดอายุ + ค้นหา</li>
           <li><b>ยาแต่ละจุด</b> ดูยาคงเหลือแยกสถานที่</li>
           <li><b>รับเข้า</b> (ปุ่มกลาง) เพิ่มยาเข้าสต็อก</li>
+          <li><b>ใบเบิก</b> เบิกยาออกหลายรายการต่อใบ + พิมพ์ใบเบิก</li>
           <li><b>แลกยา</b> ย้ายยาระหว่างสถานที่</li>
           <li><b>ตั้งค่า</b> ข้อมูล รพ. รายการยา การแจ้งเตือน ฯลฯ</li>
         </ul>` },
@@ -494,6 +504,7 @@ const Settings = {
         <button class="hchip on" data-t="">ทั้งหมด</button>
         <button class="hchip" data-t="receive">รับเข้า</button>
         <button class="hchip" data-t="exchange">ย้าย</button>
+        <button class="hchip" data-t="issue">เบิก</button>
         <button class="hchip" data-t="dispose">ตัดจ่าย</button>
       </div>
       <div id="histList">${App.loader()}</div>`;
@@ -517,12 +528,14 @@ const Settings = {
     const meta = {
       receive: { ic: 'bi-box-arrow-in-down', c: 'var(--brand-strong)', label: 'รับเข้า' },
       exchange: { ic: 'bi-arrow-left-right', c: '#2563eb', label: 'ย้าย' },
+      issue: { ic: 'bi-box-arrow-right', c: 'var(--danger)', label: 'เบิก' },
       dispose: { ic: 'bi-dash-circle', c: 'var(--danger)', label: 'ตัดจ่าย' },
       adjust: { ic: 'bi-sliders', c: '#8b5cf6', label: 'ปรับยอด' }
     }[t.type] || { ic: 'bi-dot', c: 'var(--muted)', label: t.type };
     let route = '';
     if (t.type === 'receive') route = '→ ' + App.esc(t.to_location_name || '');
     else if (t.type === 'exchange') route = App.esc(t.from_location_name || '') + ' → ' + App.esc(t.to_location_name || '');
+    else if (t.type === 'issue') route = App.esc(t.from_location_name || '') + (t.requester ? ' · ' + App.esc(t.requester) : '') + (t.department ? ' · ' + App.esc(t.department) : '') + (t.slip_no ? ' · เลขที่ ' + App.esc(t.slip_no) : '');
     else if (t.type === 'dispose') route = App.esc(t.from_location_name || '') + (t.reason ? ' · ' + App.esc(t.reason) : '');
     else if (t.type === 'adjust') route = App.esc(t.from_location_name || '') + (t.note ? ' · ' + App.esc(t.note) : '');
     const when = t.created_at ? new Date(t.created_at).toLocaleString('th-TH', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
@@ -669,6 +682,52 @@ const Settings = {
       if (r && r.status === 'success') { App.toast(r.message || 'บันทึกแล้ว', 'ok'); b.innerHTML = '<i class="bi bi-check2"></i>'; }
       else { b.disabled = false; b.textContent = 'บันทึก'; App.toast((r && r.message) || 'ไม่สำเร็จ', 'err'); }
     }));
+  },
+
+  /* ---------- ตั้งค่าใบเบิก (หัวกระดาษ + ผู้ลงนาม) ---------- */
+  async issueSettings(view) {
+    view.innerHTML = `${this.back()}<div class="page-title">ตั้งค่าใบเบิก</div>
+      <div id="ifForm">${App.loader()}</div>`;
+    const r = await api('getConfig').catch(() => null);
+    const f = ((r && r.config) || {}).issue_form || {};
+    document.getElementById('ifForm').innerHTML = `
+      <div class="page-sub">ข้อความเหล่านี้จะแสดงบนใบเบิกที่พิมพ์ออกมา</div>
+      <div class="field"><label>ชื่อหัวเอกสาร</label>
+        <input type="text" id="ifTitle" value="${App.esc(f.title || 'ใบเบิกเวชภัณฑ์ยาและเวชภัณฑ์มิใช่ยา')}"></div>
+      <div class="field"><label>หน่วยงานคลัง (บรรทัดรอง)</label>
+        <input type="text" id="ifOrg" value="${App.esc(f.org_unit || '')}" placeholder="เช่น งานคลังเวชภัณฑ์โรงพยาบาลตรอน"></div>
+      <div class="field"><label>จากหน่วยงาน</label>
+        <input type="text" id="ifFrom" value="${App.esc(f.from_unit || '')}" placeholder="เว้นว่างใช้ชื่อโรงพยาบาล"></div>
+      <div class="field"><label>ถึง (หัวหน้าหน่วย)</label>
+        <input type="text" id="ifTo" value="${App.esc(f.to_label || 'หัวหน้าหน่วยพัสดุ')}"></div>
+
+      <div class="section-label">ผู้จ่าย (ลงนามอัตโนมัติ)</div>
+      <div class="field"><label>ชื่อผู้จ่าย</label><input type="text" id="ifIssuerName" value="${App.esc(f.issuer_name || '')}"></div>
+      <div class="field"><label>ตำแหน่งผู้จ่าย</label><input type="text" id="ifIssuerPos" value="${App.esc(f.issuer_position || '')}"></div>
+
+      <div class="section-label">ผู้สั่งจ่าย / หัวหน้าหน่วยพัสดุ</div>
+      <div class="field"><label>ชื่อผู้สั่งจ่าย</label><input type="text" id="ifApvName" value="${App.esc(f.approver_name || '')}"></div>
+      <div class="field"><label>ตำแหน่งผู้สั่งจ่าย</label><input type="text" id="ifApvPos" value="${App.esc(f.approver_position || '')}" placeholder="หลายบรรทัดได้ คั่นด้วย Enter"></div>
+
+      <button id="ifSave" class="btn-brand">บันทึก</button>
+      <p class="hint" style="margin-top:12px">ช่อง "ผู้เบิก" และ "ผู้รับ" บนใบเบิกจะเว้นว่างไว้ให้เซ็นเอง</p>`;
+
+    document.getElementById('ifSave').addEventListener('click', async (e) => {
+      const issue_form = {
+        title: document.getElementById('ifTitle').value.trim(),
+        org_unit: document.getElementById('ifOrg').value.trim(),
+        from_unit: document.getElementById('ifFrom').value.trim(),
+        to_label: document.getElementById('ifTo').value.trim(),
+        issuer_name: document.getElementById('ifIssuerName').value.trim(),
+        issuer_position: document.getElementById('ifIssuerPos').value.trim(),
+        approver_name: document.getElementById('ifApvName').value.trim(),
+        approver_position: document.getElementById('ifApvPos').value.trim()
+      };
+      const btn = e.currentTarget; btn.disabled = true; btn.innerHTML = '<span class="spin"></span>';
+      const res = await api('saveConfig', { config: { issue_form } }).catch(() => null);
+      btn.disabled = false; btn.textContent = 'บันทึก';
+      App.toast((res && res.status === 'success') ? 'บันทึกแล้ว' : ((res && res.message) || 'บันทึกไม่สำเร็จ'), (res && res.status === 'success') ? 'ok' : 'err');
+    });
   },
 
   /* ---------- พิมพ์รายงาน (A4 / PDF) ---------- */

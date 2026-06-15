@@ -119,6 +119,8 @@ function route_(action, p) {
     // ---- ใบเบิก / issue (stock-out, FIFO) ----
     case 'issueSearch':      return guard_(p, ['view'],    function ()  { return apiIssueSearch_(p.q); });
     case 'issueItem':        return guard_(p, ['receive'], function (u) { return apiIssueItem_(p, u); });
+    case 'issueSlip':        return guard_(p, ['receive'], function (u) { return apiIssueSlip_(p, u); });
+    case 'getIssueSlip':     return guard_(p, ['view'],    function ()  { return apiGetIssueSlip_(p.slip_no); });
     case 'recentIssues':     return guard_(p, ['view'],    function ()  { return apiRecentIssues_(p.limit || 20); });
 
     // ---- Part 6: notifications + account ----
@@ -266,6 +268,11 @@ function apiSaveConfig_(patch) {
     if (patch.expiry_thresholds) c.expiry_thresholds = patch.expiry_thresholds;
     if (patch.default_receive_location_id !== undefined) c.default_receive_location_id = patch.default_receive_location_id;
     if (patch.display_be !== undefined) c.display_be = !!patch.display_be;
+    if (patch.issue_form && typeof patch.issue_form === 'object') {
+      var cur = c.issue_form || defaultIssueForm_();
+      Object.keys(patch.issue_form).forEach(function (k) { if (k !== 'seq') cur[k] = String(patch.issue_form[k] || '').trim(); });
+      c.issue_form = cur;
+    }
     // notification secret ปรับแยกใน part ถัดไป
   }
   c.updated_at = now_();
@@ -345,9 +352,25 @@ function defaultConfig_() {
     expiry_thresholds: { critical: CONFIG.EXPIRY.critical, high: CONFIG.EXPIRY.high, medium: CONFIG.EXPIRY.medium },
     default_receive_location_id: '',
     notification: { enabled: false, channel: 'telegram', telegram_bot_token: '', telegram_chat_id: '', line_token: '', notify_time: '08:00' },
+    issue_form: defaultIssueForm_(),
     app_version: CONFIG.APP_VERSION,
     created_at: now_(),
     updated_at: now_()
+  };
+}
+
+// ค่าเริ่มต้นหัว/ท้ายใบเบิก (แก้ได้ที่ ตั้งค่า > ใบเบิก)
+function defaultIssueForm_() {
+  return {
+    title: 'ใบเบิกเวชภัณฑ์ยาและเวชภัณฑ์มิใช่ยา',
+    org_unit: 'งานคลังเวชภัณฑ์',
+    from_unit: '',
+    to_label: 'หัวหน้าหน่วยพัสดุ',
+    issuer_name: '',
+    issuer_position: '',
+    approver_name: '',
+    approver_position: '',
+    seq: 0
   };
 }
 
@@ -1061,6 +1084,146 @@ function apiRecentIssues_(limit) {
   tx.sort(function (a, b) { return String(b.created_at || '').localeCompare(String(a.created_at || '')); });
   var imgMap = buildDrugImageMap_();
   return { status: 'success', data: tx.slice(0, limit).map(function (t) { var o = stripMeta_(t); o.image_url = imgMap[t.drug_id] || ''; return o; }) };
+}
+
+// ออกใบเบิก 1 ใบ หลายรายการ → สร้างเลขที่ใบเบิก + หัก FIFO ทุกตัว + เก็บหัวใบไว้กับทุก transaction
+function apiIssueSlip_(p, user) {
+  var lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(20000);
+
+    var rawItems = (p && p.items) || [];
+    if (!rawItems.length) return { status: 'error', message: 'ยังไม่ได้เลือกยาที่จะเบิก' };
+
+    var requester = String(p.requester || '').trim();
+    if (!requester) return { status: 'error', message: 'กรุณาระบุผู้เบิก' };
+    var position = String(p.position || '').trim();
+    var department = String(p.department || '').trim();
+    var receiver = String(p.receiver || '').trim();
+    var headNote = String(p.note || '').trim();
+
+    // รวมรายการซ้ำ drug_id เป็นก้อนเดียว
+    var mergeMap = {};
+    rawItems.forEach(function (line) {
+      var k = line.drug_id;
+      if (!mergeMap[k]) mergeMap[k] = { drug_id: k, qty: 0, note: String(line.note || '').trim() };
+      mergeMap[k].qty += Number(line.qty) || 0;
+      if (!mergeMap[k].note && line.note) mergeMap[k].note = String(line.note).trim();
+    });
+
+    // ตรวจคงเหลือก่อนทั้งหมด (ยังไม่ตัด) เพื่อกันออกใบครึ่ง ๆ กลาง ๆ
+    var allItems = readAll_('Items').filter(function (it) { return it.status === 'active' && Number(it.qty || 0) > 0; });
+    var byDrug = {};
+    allItems.forEach(function (it) { (byDrug[it.drug_id] = byDrug[it.drug_id] || []).push(it); });
+
+    var plan = [];
+    var keys = Object.keys(mergeMap);
+    for (var i = 0; i < keys.length; i++) {
+      var line = mergeMap[keys[i]];
+      var drug = findById_('Drugs', line.drug_id);
+      if (!drug) return { status: 'error', message: 'ไม่พบยาบางรายการในระบบ' };
+      var qty = Number(line.qty);
+      if (!qty || qty <= 0) return { status: 'error', message: 'จำนวนไม่ถูกต้อง: ' + drug.name };
+      var lots = (byDrug[drug.id] || []).slice();
+      var total = lots.reduce(function (s, it) { return s + Number(it.qty || 0); }, 0);
+      if (qty > total) return { status: 'error', message: 'จำนวนเกินคงเหลือ: ' + drug.name + ' (มี ' + total + ')' };
+      plan.push({ drug: drug, qty: qty, note: line.note, lots: lots });
+    }
+
+    // ออกเลขที่ใบเบิก
+    var c = readConfig_();
+    var f = c.issue_form || defaultIssueForm_();
+    f.seq = (Number(f.seq) || 0) + 1;
+    c.issue_form = f;
+    writeConfig_(c);
+    var beYY = ('0' + ((new Date().getFullYear() + 543) % 100)).slice(-2);
+    var slipNo = beYY + '/' + ('0000' + f.seq).slice(-4);
+
+    var ts = now_();
+    plan.forEach(function (pl) {
+      // FIFO: ใกล้หมดอายุก่อน เสมอกันใช้ของที่รับเข้าก่อน
+      pl.lots.sort(function (a, b) {
+        var da = daysTo_(a.expiry_date), db = daysTo_(b.expiry_date);
+        da = (da == null ? 1e9 : da); db = (db == null ? 1e9 : db);
+        if (da !== db) return da - db;
+        return String(a.created_at || '').localeCompare(String(b.created_at || ''));
+      });
+      var remain = pl.qty;
+      for (var j = 0; j < pl.lots.length && remain > 0; j++) {
+        var it = pl.lots[j];
+        var take = Math.min(remain, Number(it.qty || 0));
+        it.qty = Number(it.qty || 0) - take;
+        if (it.qty <= 0) { it.qty = 0; it.status = 'used'; }
+        it.updated_at = ts;
+        updateRecord_('Items', it.id, it);
+
+        appendRecord_('Transactions', {
+          id: Utilities.getUuid(), type: 'issue', item_id: it.id,
+          drug_id: pl.drug.id, drug_name: pl.drug.name,
+          from_location_id: it.location_id, from_location_name: it.location_name,
+          to_location_id: '', to_location_name: department,
+          qty: take, lot_no: it.lot_no, expiry_date: it.expiry_date,
+          reason: 'เบิก', slip_no: slipNo,
+          requester: requester, position: position, department: department, receiver: receiver,
+          note: pl.note || headNote,
+          by: user.username, created_at: ts
+        });
+        remain -= take;
+      }
+    });
+
+    return { status: 'success', message: 'ออกใบเบิกเลขที่ ' + slipNo + ' แล้ว', slip_no: slipNo };
+  } catch (e) {
+    logError_('issueSlip', e);
+    return { status: 'error', message: 'ออกใบเบิกไม่สำเร็จ ลองอีกครั้ง' };
+  } finally {
+    try { lock.releaseLock(); } catch (_) {}
+  }
+}
+
+// ดึงข้อมูลใบเบิกตามเลขที่ เพื่อนำไปพิมพ์ (รวมรายการต่อยา + คงเหลือปัจจุบัน + หน่วยนับ + ขั้นต่ำ)
+function apiGetIssueSlip_(slipNo) {
+  slipNo = String(slipNo || '').trim();
+  if (!slipNo) return { status: 'error', message: 'ไม่พบเลขที่ใบเบิก' };
+  var tx = readAll_('Transactions').filter(function (t) { return t.type === 'issue' && t.slip_no === slipNo; });
+  if (!tx.length) return { status: 'error', message: 'ไม่พบใบเบิกนี้' };
+  tx.sort(function (a, b) { return String(a.created_at || '').localeCompare(String(b.created_at || '')); });
+  var head = tx[0];
+
+  var drugs = {};
+  readAll_('Drugs').forEach(function (d) { drugs[d.id] = d; });
+  var live = {};
+  readAll_('Items').filter(function (it) { return it.status === 'active' && Number(it.qty || 0) > 0; })
+    .forEach(function (it) { live[it.drug_id] = (live[it.drug_id] || 0) + Number(it.qty || 0); });
+
+  var lineMap = {}, order = [];
+  tx.forEach(function (t) {
+    var k = t.drug_id;
+    if (!lineMap[k]) { lineMap[k] = { drug_id: k, drug_name: t.drug_name, issued: 0, note: t.note || '' }; order.push(k); }
+    lineMap[k].issued += Number(t.qty || 0);
+    if (!lineMap[k].note && t.note) lineMap[k].note = t.note;
+  });
+  var lines = order.map(function (k) {
+    var d = drugs[k] || {}, l = lineMap[k];
+    l.unit = d.unit || '';
+    l.min_qty = (Number(d.min_qty || 0) > 0) ? Number(d.min_qty) : '';
+    l.max_qty = '';
+    l.remaining = live[k] || 0;
+    return l;
+  });
+
+  var c = readConfig_();
+  return {
+    status: 'success',
+    slip: {
+      slip_no: slipNo, date: head.created_at,
+      requester: head.requester || '', position: head.position || '',
+      department: head.department || '', receiver: head.receiver || '',
+      note: head.note || '', by: head.by || '', lines: lines
+    },
+    form: c.issue_form || defaultIssueForm_(),
+    hospital_name: c.hospital_name || ''
+  };
 }
 
 // ============================================================ NOTIFICATIONS (Part 6)
