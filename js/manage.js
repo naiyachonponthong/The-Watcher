@@ -147,15 +147,32 @@ const Manage = {
   async drugs(view) {
     view.innerHTML = `${Settings.back()}
       <div class="page-title">รายการยา</div>
-      <div class="d-flex gap-2 mb-3">
+      <div class="d-flex gap-2 mb-2">
         <input type="text" id="drugSearch" class="flex-fill" placeholder="ค้นหาชื่อยา หรือบาร์โค้ด"
           style="padding:12px 14px;border:1px solid var(--line);border-radius:12px;font-family:inherit;outline:none">
         <button id="addDrugBtn" class="btn-ghost" style="width:auto"><i class="bi bi-plus-lg"></i> เพิ่มยา</button>
       </div>
+      <div class="d-flex align-items-center gap-3 mb-3" style="padding:0 2px">
+        <button id="importCsvBtn" style="background:none;border:none;padding:0;cursor:pointer;color:var(--brand-strong);font-family:inherit;font-size:14px">
+          <i class="bi bi-upload"></i> นำเข้า CSV</button>
+        <span class="hint">·</span>
+        <button id="dlSampleBtn" style="background:none;border:none;padding:0;cursor:pointer;color:var(--muted);font-family:inherit;font-size:14px">
+          <i class="bi bi-file-earmark-arrow-down"></i> โหลดไฟล์ตัวอย่าง</button>
+      </div>
+      <input type="file" id="csvFile" accept=".csv,text/csv" style="display:none">
       <div id="drugList">${App.loader()}</div>`;
 
     document.getElementById('addDrugBtn').addEventListener('click', () => this.drugForm(view, null));
     document.getElementById('drugSearch').addEventListener('input', e => this.renderDrugList(e.target.value));
+    document.getElementById('importCsvBtn').addEventListener('click', () => document.getElementById('csvFile').click());
+    document.getElementById('dlSampleBtn').addEventListener('click', () => this.downloadSample());
+    document.getElementById('csvFile').addEventListener('change', e => {
+      const file = e.target.files[0]; if (!file) return;
+      const reader = new FileReader();
+      reader.onload = ev => this.showImportPreview(view, ev.target.result);
+      reader.readAsText(file, 'UTF-8');
+      e.target.value = '';
+    });
     await this.loadDrugs();
   },
 
@@ -324,6 +341,103 @@ const Manage = {
       if (r && r.status === 'success') { Scanner.stopCamera(); App.toast('ลบแล้ว', 'ok'); this.drugs(view); }
       else App.toast((r && r.message) || 'ลบไม่สำเร็จ', 'err');
     });
+  },
+
+  /* ==================== CSV Import ==================== */
+  parseCsv(text) {
+    text = text.replace(/^﻿/, ''); // strip BOM
+    const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    if (lines.length < 2) return [];
+    const parseRow = (line) => {
+      const cols = []; let cur = ''; let q = false;
+      for (let i = 0; i < line.length; i++) {
+        const ch = line[i];
+        if (ch === '"') { if (q && line[i + 1] === '"') { cur += '"'; i++; } else q = !q; }
+        else if (ch === ',' && !q) { cols.push(cur.trim()); cur = ''; }
+        else cur += ch;
+      }
+      cols.push(cur.trim()); return cols;
+    };
+    return lines.slice(1).map(line => {
+      const c = parseRow(line);
+      return { name: c[0] || '', code: c[1] || '', unit: c[2] || '',
+        price: parseFloat(c[3]) || 0,
+        require_lot: /^(ใช่|yes|true|1)$/i.test(c[4] || ''),
+        min_qty: parseInt(c[5]) || 0 };
+    }).filter(d => d.name.trim());
+  },
+
+  downloadSample() {
+    const BOM = '﻿';
+    const csv = [
+      'ชื่อยา,บาร์โค้ด,หน่วย,ราคาต่อหน่วย,Lot บังคับ (ใช่/ไม่),สต็อกขั้นต่ำ',
+      'Paracetamol 500mg,8850006577073,เม็ด,1.50,ไม่,100',
+      'Amoxicillin 500mg,8850007850229,แคปซูล,5.00,ใช่,50',
+      'Dicloxacillin 250mg,4902430733298,แผง,12.00,ใช่,30',
+      'Normal Saline 0.9% 1000ml,,ขวด,45.00,ใช่,20',
+      'Ibuprofen 400mg,,เม็ด,3.50,ไม่,80'
+    ].join('\n');
+    const blob = new Blob([BOM + csv], { type: 'text/csv;charset=utf-8' });
+    const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: 'template_รายการยา.csv' });
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(a.href);
+  },
+
+  showImportPreview(view, csvText) {
+    const drugs = this.parseCsv(csvText);
+    if (!drugs.length) { App.toast('ไม่พบข้อมูลยาในไฟล์ ตรวจสอบรูปแบบ CSV', 'err'); return; }
+
+    view.innerHTML = `
+      <button class="btn-ghost" style="width:auto;margin-bottom:16px" id="impBack"><i class="bi bi-chevron-left"></i> ยกเลิก</button>
+      <div class="page-title">ตรวจสอบก่อนนำเข้า</div>
+      <div class="page-sub">พบ <b>${drugs.length}</b> รายการ · ตรวจสอบแล้วกดยืนยัน</div>
+      <div style="overflow-x:auto;margin-bottom:16px;border-radius:12px;border:1px solid var(--line)">
+        <table style="width:100%;border-collapse:collapse;font-size:13px;min-width:480px">
+          <thead>
+            <tr style="background:var(--brand-soft)">
+              <th style="padding:9px 10px;text-align:left;white-space:nowrap">ชื่อยา</th>
+              <th style="padding:9px 10px;text-align:left;white-space:nowrap">บาร์โค้ด</th>
+              <th style="padding:9px 10px;text-align:left">หน่วย</th>
+              <th style="padding:9px 10px;text-align:right">ราคา</th>
+              <th style="padding:9px 10px;text-align:center">Lot</th>
+              <th style="padding:9px 10px;text-align:right">ขั้นต่ำ</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${drugs.map((d, i) => `
+              <tr style="background:${i % 2 === 0 ? 'var(--card)' : 'var(--bg)'}">
+                <td style="padding:8px 10px;border-top:1px solid var(--line)">${App.esc(d.name)}</td>
+                <td style="padding:8px 10px;border-top:1px solid var(--line);color:var(--muted);font-size:12px">${App.esc(d.code || '—')}</td>
+                <td style="padding:8px 10px;border-top:1px solid var(--line)">${App.esc(d.unit || '—')}</td>
+                <td style="padding:8px 10px;border-top:1px solid var(--line);text-align:right">${d.price ? '฿' + d.price.toFixed(2) : '—'}</td>
+                <td style="padding:8px 10px;border-top:1px solid var(--line);text-align:center">${d.require_lot ? '<i class="bi bi-check-circle-fill" style="color:var(--brand-strong)"></i>' : '—'}</td>
+                <td style="padding:8px 10px;border-top:1px solid var(--line);text-align:right">${d.min_qty || '—'}</td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+      <button id="impConfirm" class="btn-brand"><i class="bi bi-upload"></i> ยืนยันนำเข้า ${drugs.length} รายการ</button>
+      <p class="hint" style="margin-top:10px">· ยาที่บาร์โค้ดซ้ำกับที่มีอยู่แล้วจะถูกข้ามอัตโนมัติ<br>· ยาที่ไม่มีบาร์โค้ดจะนำเข้าเสมอ</p>`;
+
+    document.getElementById('impBack').addEventListener('click', () => this.drugs(view));
+    document.getElementById('impConfirm').addEventListener('click', e => this.runImport(view, drugs, e.currentTarget));
+  },
+
+  async runImport(view, drugs, btn) {
+    btn.disabled = true; btn.innerHTML = '<span class="spin"></span> กำลังนำเข้า...';
+    let ok = 0, skip = 0, fail = 0;
+    for (const d of drugs) {
+      const r = await api('saveDrug', { drug: d }).catch(() => null);
+      if (!r) { fail++; continue; }
+      if (r.status === 'success') ok++;
+      else if (r.message && r.message.includes('บาร์โค้ด')) skip++;
+      else fail++;
+    }
+    const parts = [`นำเข้าสำเร็จ ${ok} รายการ`];
+    if (skip) parts.push(`ข้าม ${skip} รายการ (บาร์โค้ดซ้ำ)`);
+    if (fail) parts.push(`ผิดพลาด ${fail} รายการ`);
+    App.toast(parts.join(' · '), ok > 0 ? 'ok' : 'err');
+    this.drugs(view);
   },
 
   /* ==================== Lot บังคับ ==================== */
