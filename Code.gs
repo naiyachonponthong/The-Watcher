@@ -673,6 +673,8 @@ function apiSaveDrug_(d) {
     }
     if (d.clear_image) { if (ex.image_file_id) { try { DriveApp.getFileById(ex.image_file_id).setTrashed(true); } catch (_) {} } ex.image_file_id = ''; }
     ex.min_qty = (d.min_qty !== undefined) ? (Number(d.min_qty) || 0) : (ex.min_qty || 0);
+    ex.price = Number(d.price) || 0;
+    ex.category = String(d.category || '');
     ex.updated_at = now_();
     updateRecord_('Drugs', d.id, ex);
     var outU = stripMeta_(ex); outU.image_url = ex.image_file_id ? imageUrl_(ex.image_file_id) : '';
@@ -688,6 +690,8 @@ function apiSaveDrug_(d) {
     default_location_id: d.default_location_id || '',
     image_file_id: d.image_file_id || '',
     min_qty: Number(d.min_qty) || 0,
+    price: Number(d.price) || 0,
+    category: String(d.category || ''),
     active: true,
     created_at: now_(),
     updated_at: now_()
@@ -847,7 +851,12 @@ function apiGetDashboard_() {
   var byLoc = Object.keys(byLocMap).map(function (k) { return byLocMap[k]; })
     .sort(function (a, b) { return b.count - a.count; });
 
-  return { status: 'success', summary: s, near: near.slice(0, 100), by_location: byLoc, thresholds: th, low_stock: apiGetLowStock_().data };
+  var priceMap = {};
+  readAll_('Drugs').forEach(function (d) { if (d.id) priceMap[d.id] = Number(d.price || 0); });
+  var totalValue = 0;
+  items.forEach(function (it) { var q = Number(it.qty || 0); if (q > 0) totalValue += q * (priceMap[it.drug_id] || 0); });
+
+  return { status: 'success', summary: s, near: near.slice(0, 100), by_location: byLoc, thresholds: th, low_stock: apiGetLowStock_().data, total_value: Math.round(totalValue * 100) / 100 };
 }
 
 function apiSearchItems_(query) {
@@ -1001,7 +1010,7 @@ function apiIssueSearch_(query) {
     var k = it.drug_id;
     if (!agg[k]) agg[k] = {
       drug_id: it.drug_id, drug_name: it.drug_name, image_url: imgMap[it.drug_id] || '',
-      unit: d.unit || '', code: d.code || '', total: 0, lots: 0, min_days: null
+      unit: d.unit || '', code: d.code || '', price: Number(d.price || 0), total: 0, lots: 0, min_days: null
     };
     agg[k].total += Number(it.qty || 0);
     agg[k].lots++;
@@ -1206,6 +1215,7 @@ function apiGetIssueSlip_(slipNo) {
   var lines = order.map(function (k) {
     var d = drugs[k] || {}, l = lineMap[k];
     l.unit = d.unit || '';
+    l.unit_price = Number(d.price || 0);
     l.min_qty = (Number(d.min_qty || 0) > 0) ? Number(d.min_qty) : '';
     l.max_qty = '';
     l.remaining = live[k] || 0;
