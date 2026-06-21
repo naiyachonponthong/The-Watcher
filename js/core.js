@@ -131,6 +131,8 @@ const App = {
     document.querySelectorAll('#bottomNav .nav-btn').forEach(b => {
       b.classList.toggle('active', b.dataset.tab === tab);
     });
+    const hSet = document.getElementById('hSettings');
+    if (hSet) hSet.classList.toggle('active', tab === 'settings');
     const view = document.getElementById('view');
     const map = {
       home: viewHome, locations: viewLocations, receive: viewReceive,
@@ -258,5 +260,7 @@ document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('#bottomNav .nav-btn').forEach(b => {
     b.addEventListener('click', () => App.navigate(b.dataset.tab));
   });
+  const hSet = document.getElementById('hSettings');
+  if (hSet) hSet.addEventListener('click', () => App.navigate('settings'));
   App.boot();
 });

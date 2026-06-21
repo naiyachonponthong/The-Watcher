@@ -78,6 +78,14 @@ body {
 #appHeader .logo-box i { font-size: 24px; }
 #appHeader .h-title { font-size: 1.4rem; font-weight: 600; line-height: 1.15; }
 #appHeader .h-sub { font-size: 0.78rem; opacity: 0.85; margin-top: 1px; }
+#appHeader .h-settings {
+  flex: none; width: 40px; height: 40px; border-radius: 12px; border: none; cursor: pointer;
+  background: oklch(0.99 0.01 283 / 0.15); color: oklch(0.99 0.01 283);
+  display: grid; place-items: center; transition: background .15s;
+}
+#appHeader .h-settings:active { background: oklch(0.99 0.01 283 / 0.28); }
+#appHeader .h-settings.active { background: oklch(0.99 0.01 283 / 0.28); }
+#appHeader .h-settings i { font-size: 20px; }
 
 #view { padding: 18px 16px 8px; max-width: 560px; margin: 0 auto; }
 
@@ -202,7 +210,7 @@ body {
   padding-bottom: var(--safe-b);
   background: var(--card);
   border-top: 1px solid var(--line-soft);
-  display: grid; grid-template-columns: repeat(6, 1fr); align-items: center;
+  display: grid; grid-template-columns: repeat(5, 1fr); align-items: center;
   box-shadow: 0 -4px 20px oklch(0.4 0.06 283 / 0.10);
 }
 #bottomNav .nav-btn {
@@ -232,6 +240,9 @@ body {
   position: absolute; left: 0; right: 0; text-align: center;
   bottom: 6px; font-size: 0.68rem; color: var(--muted); font-weight: 600;
 }
+
+/* settings button: hidden in mobile nav (grid stays 5), visible only in desktop sidebar */
+#bottomNav .nav-settings-desk { display: none; }
 
 /* ============================ Scanner panel */
 .scan-input-wrap { position: relative; }
@@ -656,6 +667,10 @@ body {
   #bottomNav .fab i { font-size: 20px; }
   #bottomNav .fab::after { content: 'รับเข้า'; font-weight: 700; font-size: 0.98rem; }
   #bottomNav .fab-label { display: none; }
+
+  /* settings ชิดล่างของ sidebar + ซ่อน gear ใน header */
+  #bottomNav .nav-settings-desk { display: flex; margin-top: auto; }
+  #appHeader .h-settings { display: none; }
 
   /* กริดกว้างขึ้นบนจอใหญ่ */
   .stat-grid { grid-template-columns: repeat(4, 1fr); }
