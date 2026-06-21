@@ -236,9 +236,12 @@ const Manage = {
       <div class="d-flex gap-2">
         <div class="field flex-fill"><label>หน่วย</label>
           <input type="text" id="dUnit" value="${App.esc(drug.unit || '')}" placeholder="เม็ด / ขวด / แผง"></div>
-        <div class="field flex-fill"><label>จุดเก็บเริ่มต้น</label>
-          <select id="dLoc">${locOpts}</select></div>
+        <div class="field flex-fill"><label>ราคาต่อหน่วย (บาท)</label>
+          <input type="number" id="dPrice" min="0" step="0.01" value="${drug.price || ''}" inputmode="decimal" placeholder="0.00"></div>
       </div>
+
+      <div class="field"><label>จุดเก็บเริ่มต้น</label>
+        <select id="dLoc">${locOpts}</select></div>
 
       <div class="field"><label>แจ้งเตือนเมื่อสต็อกรวมต่ำกว่า (0 = ปิด)</label>
         <input type="number" id="dMin" min="0" value="${drug.min_qty || 0}" inputmode="numeric"></div>
@@ -298,6 +301,7 @@ const Manage = {
         name: document.getElementById('dName').value.trim(),
         code: document.getElementById('dCode').value.trim(),
         unit: document.getElementById('dUnit').value.trim(),
+        price: parseFloat(document.getElementById('dPrice').value) || 0,
         default_location_id: document.getElementById('dLoc').value,
         require_lot: document.getElementById('dLot').checked,
         min_qty: parseInt(document.getElementById('dMin').value) || 0

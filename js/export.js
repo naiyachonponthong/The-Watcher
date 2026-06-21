@@ -32,6 +32,7 @@ const Export = {
       <div class="field"><label>ประเภทข้อมูล</label>
         <select id="exKind">
           <option value="receive">รับเข้า (ตามวันที่)</option>
+          <option value="issue">ใบเบิก (ตามวันที่)</option>
           <option value="all">การเคลื่อนไหวทั้งหมด (รับเข้า + ย้าย)</option>
           <option value="stock">สต็อกคงเหลือปัจจุบัน (ทั้งหมด)</option>
         </select></div>

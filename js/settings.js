@@ -59,7 +59,7 @@ const Settings = {
       <button class="menu-item" data-act="export">
         <div class="mi-icon c-indigo"><i class="bi bi-file-earmark-excel-fill"></i></div>
         <div class="mi-body"><div class="mi-title">ส่งออกข้อมูล (Excel)</div>
-          <div class="mi-desc">ดาวน์โหลดรายการรับเข้า/สต็อก เป็นไฟล์ .xlsx</div></div>
+          <div class="mi-desc">ดาวน์โหลดรายการรับเข้า/ใบเบิก/สต็อก เป็นไฟล์ .xlsx</div></div>
         <i class="bi bi-chevron-right mi-arrow"></i>
       </button>
 

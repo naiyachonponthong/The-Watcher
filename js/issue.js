@@ -89,6 +89,7 @@ const Issue = {
     if (this.cart.some(x => x.drug_id === d.drug_id)) return;
     this.cart.push({
       drug_id: d.drug_id, drug_name: d.drug_name, unit: d.unit || '',
+      price: d.price || 0,
       total: d.total, min_days: d.min_days, image_url: d.image_url || '', qty: 1, note: ''
     });
     this.renderCart();
@@ -113,8 +114,11 @@ const Issue = {
     if (form) form.style.display = 'block';
 
     const totalQty = this.cart.reduce((s, it) => s + (it.qty || 0), 0);
+    const totalValue = this.cart.reduce((s, it) => s + (it.price || 0) * (it.qty || 0), 0);
+    const fmtBaht = n => '฿' + n.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     wrap.innerHTML = this.cart.map(it => {
       const b = expiryBucket(it.min_days);
+      const lineValue = (it.price || 0) * it.qty;
       return `
       <div class="cart-item card-soft">
         <div class="ci-top">
@@ -131,11 +135,13 @@ const Issue = {
             <button type="button" class="qty-btn is-minus" data-id="${it.drug_id}">-</button>
             <input type="number" class="is-qty" data-id="${it.drug_id}" value="${it.qty}" min="1" max="${it.total}" inputmode="numeric">
             <button type="button" class="qty-btn is-plus" data-id="${it.drug_id}">+</button>
+            ${it.price ? `<span class="qty-unit" style="margin-left:8px;color:var(--brand-strong)">${fmtBaht(lineValue)}</span>` : ''}
           </div>
         </div>
       </div>`;
     }).join('') + `
-      <div class="cart-summary"><span>รวมที่จะเบิก</span><span>${this.cart.length} รายการ · ${totalQty} หน่วย</span></div>`;
+      <div class="cart-summary"><span>รวมที่จะเบิก</span><span>${this.cart.length} รายการ · ${totalQty} หน่วย</span></div>
+      ${totalValue > 0 ? `<div class="cart-summary" style="font-weight:700;color:var(--brand-strong)"><span>มูลค่ารวม</span><span>${fmtBaht(totalValue)}</span></div>` : ''}`;
 
     if (confirm) confirm.innerHTML = `<i class="bi bi-file-earmark-text"></i> ออกใบเบิก & พิมพ์ (${this.cart.length} รายการ)`;
 
@@ -233,19 +239,31 @@ const Issue = {
     const MIN_ROWS = 12;
     const dateStr = slip.date ? new Date(slip.date).toLocaleDateString('th-TH', { day: 'numeric', month: 'long', year: 'numeric' }) : '';
 
-    let rows = lines.map((l, i) => `<tr>
-      <td class="c">${i + 1}</td>
-      <td>${esc(l.drug_name)}</td>
-      <td class="c">${l.max_qty || ''}</td>
-      <td class="c">${l.min_qty || ''}</td>
-      <td class="c">${l.remaining}</td>
-      <td class="c">${esc(l.unit || '')}</td>
-      <td class="c">${l.issued}</td>
-      <td class="c"></td>
-      <td>${esc(l.note || '')}</td>
-    </tr>`).join('');
+    const hasPrice = lines.some(l => l.unit_price > 0);
+    const fmtNum = n => (n == null || n === '') ? '' : Number(n).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    let grandTotal = 0;
+
+    let rows = lines.map((l, i) => {
+      const lineTotal = hasPrice ? (l.unit_price || 0) * (l.issued || 0) : 0;
+      grandTotal += lineTotal;
+      return `<tr>
+        <td class="c">${i + 1}</td>
+        <td>${esc(l.drug_name)}</td>
+        <td class="c">${l.max_qty || ''}</td>
+        <td class="c">${l.min_qty || ''}</td>
+        <td class="c">${l.remaining}</td>
+        <td class="c">${esc(l.unit || '')}</td>
+        <td class="c">${l.issued}</td>
+        <td class="c"></td>
+        ${hasPrice ? `<td class="r">${l.unit_price ? fmtNum(l.unit_price) : ''}</td><td class="r">${lineTotal ? fmtNum(lineTotal) : ''}</td>` : ''}
+        <td>${esc(l.note || '')}</td>
+      </tr>`;
+    }).join('');
     for (let i = lines.length; i < MIN_ROWS; i++) {
-      rows += `<tr><td class="c">${i + 1}</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>`;
+      rows += `<tr><td class="c">${i + 1}</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>${hasPrice ? '<td></td><td></td>' : ''}<td></td></tr>`;
+    }
+    if (hasPrice && grandTotal > 0) {
+      rows += `<tr><td colspan="9" style="text-align:right;font-weight:600;border-top:2px solid #000">รวมมูลค่า</td><td class="r" style="font-weight:600">${fmtNum(grandTotal)}</td><td></td></tr>`;
     }
 
     const sigBlock = (role, name, position) => `
@@ -276,6 +294,7 @@ const Issue = {
         th,td { border:1px solid #000; padding:3px 5px; vertical-align:top; }
         th { text-align:center; font-weight:600; }
         td.c { text-align:center; }
+        td.r { text-align:right; }
         .sigs { display:flex; flex-wrap:wrap; margin-top:22px; }
         .sig { width:50%; line-height:2.1; margin-bottom:14px; }
         .sig .ct { text-align:center; padding-right:40px; }
@@ -295,7 +314,9 @@ const Issue = {
           <tr>
             <th rowspan="2">ลำดับ</th><th rowspan="2">รายการ</th>
             <th>จำนวน</th><th>จำนวน</th><th rowspan="2">คงเหลือ</th><th rowspan="2">หน่วยนับ</th>
-            <th colspan="2">จำนวน</th><th rowspan="2">หมายเหตุ</th>
+            <th colspan="2">จำนวน</th>
+            ${hasPrice ? '<th rowspan="2">ราคา/หน่วย</th><th rowspan="2">รวมเงิน</th>' : ''}
+            <th rowspan="2">หมายเหตุ</th>
           </tr>
           <tr><th>สูงสุด</th><th>ต่ำสุด</th><th>เบิก</th><th>จ่าย</th></tr>
         </thead>
