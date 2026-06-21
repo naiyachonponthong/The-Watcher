@@ -20,6 +20,7 @@ const Dashboard = {
         ${this.statSkeleton()}
       </div>
 
+      <div id="valueBox"></div>
       <div id="lowStockBox"></div>
 
       <div class="search-wrap">
@@ -45,9 +46,25 @@ const Dashboard = {
     this._summary = r.summary; this._near = r.near || []; this._byLoc = r.by_location || [];
     this._th = r.thresholds || App.thresholds;
     this._low = r.low_stock || [];
+    this.paintValue(r.total_value);
     this.paintStats();
     this.paintLow();
     this.renderList();
+  },
+
+  paintValue(val) {
+    const box = document.getElementById('valueBox');
+    if (!box) return;
+    if (val == null) { box.innerHTML = ''; return; }
+    const fmt = n => Number(n).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    box.innerHTML = `
+      <div class="value-banner">
+        <div>
+          <div class="hint" style="margin:0 0 4px">มูลค่าคลังยารวม</div>
+          <div style="font-size:1.45rem;font-weight:700;color:var(--brand-strong);line-height:1.1">฿${fmt(val)}</div>
+        </div>
+        <i class="bi bi-cash-coin" style="font-size:2rem;opacity:.45"></i>
+      </div>`;
   },
 
   paintLow() {

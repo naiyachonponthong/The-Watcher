@@ -6,6 +6,7 @@ const COLOR_PALETTE = ['#16A34A', '#2563EB', '#06B6D4', '#F97316', '#EAB308', '#
 const Manage = {
   _locs: [],
   _drugs: [],
+  _catFilter: '',
 
   /* ==================== สถานที่เก็บยา ==================== */
   async locations(view) {
@@ -145,6 +146,7 @@ const Manage = {
 
   /* ==================== รายการยา ==================== */
   async drugs(view) {
+    this._catFilter = '';
     view.innerHTML = `${Settings.back()}
       <div class="page-title">รายการยา</div>
       <div class="d-flex gap-2 mb-2">
@@ -160,6 +162,13 @@ const Manage = {
           <i class="bi bi-file-earmark-arrow-down"></i> โหลดไฟล์ตัวอย่าง</button>
       </div>
       <input type="file" id="csvFile" accept=".csv,text/csv" style="display:none">
+      <div class="hist-filter" id="catFilter">
+        <button class="hchip on" data-cat="">ทั้งหมด</button>
+        <button class="hchip" data-cat="ยาสามัญ">ยาสามัญ</button>
+        <button class="hchip" data-cat="ยาควบคุมพิเศษ">ยาควบคุมพิเศษ</button>
+        <button class="hchip" data-cat="เวชภัณฑ์มิใช่ยา">เวชภัณฑ์มิใช่ยา</button>
+        <button class="hchip" data-cat="อื่นๆ">อื่นๆ</button>
+      </div>
       <div id="drugList">${App.loader()}</div>`;
 
     document.getElementById('addDrugBtn').addEventListener('click', () => this.drugForm(view, null));
@@ -173,6 +182,12 @@ const Manage = {
       reader.readAsText(file, 'UTF-8');
       e.target.value = '';
     });
+    view.querySelectorAll('#catFilter .hchip').forEach(b => b.addEventListener('click', () => {
+      view.querySelectorAll('#catFilter .hchip').forEach(x => x.classList.remove('on'));
+      b.classList.add('on');
+      this._catFilter = b.dataset.cat;
+      this.renderDrugList(document.getElementById('drugSearch').value);
+    }));
     await this.loadDrugs();
   },
 
@@ -188,11 +203,12 @@ const Manage = {
     if (!wrap) return;
     q = (q || '').trim().toLowerCase();
     const list = this._drugs.filter(d =>
-      !q || d.name.toLowerCase().includes(q) || (d.code || '').toLowerCase().includes(q));
+      (!q || d.name.toLowerCase().includes(q) || (d.code || '').toLowerCase().includes(q)) &&
+      (!this._catFilter || (d.category || '') === this._catFilter));
     if (!list.length) {
       wrap.innerHTML = `<div class="empty-state"><div class="es-icon"><i class="bi bi-capsule"></i></div>
         <div class="es-title">${this._drugs.length ? 'ไม่พบรายการที่ค้นหา' : 'ยังไม่มีรายการยา'}</div>
-        <div>${this._drugs.length ? '' : 'แตะ เพิ่มยา เพื่อเริ่มต้น'}</div></div>`;
+        <div>${this._drugs.length ? 'ลองเปลี่ยนคำค้น หรือหมวดหมู่' : 'แตะ เพิ่มยา เพื่อเริ่มต้น'}</div></div>`;
       return;
     }
     wrap.innerHTML = list.map(d => `
@@ -203,6 +219,7 @@ const Manage = {
           <div class="mi-desc">
             ${d.code ? '<i class="bi bi-upc"></i> ' + App.esc(d.code) + ' · ' : ''}${App.esc(d.unit || 'หน่วย')}
             ${d.require_lot ? ' · <span style="color:var(--brand-strong)">Lot บังคับ</span>' : ''}
+            ${d.category ? ' · <span class="cat-tag">' + App.esc(d.category) + '</span>' : ''}
           </div>
         </div>
         <i class="bi bi-chevron-right mi-arrow"></i>
@@ -257,8 +274,18 @@ const Manage = {
           <input type="number" id="dPrice" min="0" step="0.01" value="${drug.price || ''}" inputmode="decimal" placeholder="0.00"></div>
       </div>
 
-      <div class="field"><label>จุดเก็บเริ่มต้น</label>
-        <select id="dLoc">${locOpts}</select></div>
+      <div class="d-flex gap-2">
+        <div class="field flex-fill"><label>หมวดหมู่</label>
+          <select id="dCat">
+            <option value="">ไม่ระบุ</option>
+            <option value="ยาสามัญ" ${(drug.category||'')==='ยาสามัญ' ? 'selected' : ''}>ยาสามัญ</option>
+            <option value="ยาควบคุมพิเศษ" ${(drug.category||'')==='ยาควบคุมพิเศษ' ? 'selected' : ''}>ยาควบคุมพิเศษ</option>
+            <option value="เวชภัณฑ์มิใช่ยา" ${(drug.category||'')==='เวชภัณฑ์มิใช่ยา' ? 'selected' : ''}>เวชภัณฑ์มิใช่ยา</option>
+            <option value="อื่นๆ" ${(drug.category||'')==='อื่นๆ' ? 'selected' : ''}>อื่นๆ</option>
+          </select></div>
+        <div class="field flex-fill"><label>จุดเก็บเริ่มต้น</label>
+          <select id="dLoc">${locOpts}</select></div>
+      </div>
 
       <div class="field"><label>แจ้งเตือนเมื่อสต็อกรวมต่ำกว่า (0 = ปิด)</label>
         <input type="number" id="dMin" min="0" value="${drug.min_qty || 0}" inputmode="numeric"></div>
@@ -319,6 +346,7 @@ const Manage = {
         code: document.getElementById('dCode').value.trim(),
         unit: document.getElementById('dUnit').value.trim(),
         price: parseFloat(document.getElementById('dPrice').value) || 0,
+        category: document.getElementById('dCat').value,
         default_location_id: document.getElementById('dLoc').value,
         require_lot: document.getElementById('dLot').checked,
         min_qty: parseInt(document.getElementById('dMin').value) || 0
@@ -363,19 +391,20 @@ const Manage = {
       return { name: c[0] || '', code: c[1] || '', unit: c[2] || '',
         price: parseFloat(c[3]) || 0,
         require_lot: /^(ใช่|yes|true|1)$/i.test(c[4] || ''),
-        min_qty: parseInt(c[5]) || 0 };
+        min_qty: parseInt(c[5]) || 0,
+        category: c[6] || '' };
     }).filter(d => d.name.trim());
   },
 
   downloadSample() {
     const BOM = '﻿';
     const csv = [
-      'ชื่อยา,บาร์โค้ด,หน่วย,ราคาต่อหน่วย,Lot บังคับ (ใช่/ไม่),สต็อกขั้นต่ำ',
-      'Paracetamol 500mg,8850006577073,เม็ด,1.50,ไม่,100',
-      'Amoxicillin 500mg,8850007850229,แคปซูล,5.00,ใช่,50',
-      'Dicloxacillin 250mg,4902430733298,แผง,12.00,ใช่,30',
-      'Normal Saline 0.9% 1000ml,,ขวด,45.00,ใช่,20',
-      'Ibuprofen 400mg,,เม็ด,3.50,ไม่,80'
+      'ชื่อยา,บาร์โค้ด,หน่วย,ราคาต่อหน่วย,Lot บังคับ (ใช่/ไม่),สต็อกขั้นต่ำ,หมวดหมู่',
+      'Paracetamol 500mg,8850006577073,เม็ด,1.50,ไม่,100,ยาสามัญ',
+      'Amoxicillin 500mg,8850007850229,แคปซูล,5.00,ใช่,50,ยาสามัญ',
+      'Dicloxacillin 250mg,4902430733298,แผง,12.00,ใช่,30,ยาควบคุมพิเศษ',
+      'Normal Saline 0.9% 1000ml,,ขวด,45.00,ใช่,20,เวชภัณฑ์มิใช่ยา',
+      'Ibuprofen 400mg,,เม็ด,3.50,ไม่,80,ยาสามัญ'
     ].join('\n');
     const blob = new Blob([BOM + csv], { type: 'text/csv;charset=utf-8' });
     const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: 'template_รายการยา.csv' });
@@ -401,6 +430,7 @@ const Manage = {
               <th style="padding:9px 10px;text-align:right">ราคา</th>
               <th style="padding:9px 10px;text-align:center">Lot</th>
               <th style="padding:9px 10px;text-align:right">ขั้นต่ำ</th>
+              <th style="padding:9px 10px;text-align:left">หมวดหมู่</th>
             </tr>
           </thead>
           <tbody>
@@ -412,6 +442,7 @@ const Manage = {
                 <td style="padding:8px 10px;border-top:1px solid var(--line);text-align:right">${d.price ? '฿' + d.price.toFixed(2) : '—'}</td>
                 <td style="padding:8px 10px;border-top:1px solid var(--line);text-align:center">${d.require_lot ? '<i class="bi bi-check-circle-fill" style="color:var(--brand-strong)"></i>' : '—'}</td>
                 <td style="padding:8px 10px;border-top:1px solid var(--line);text-align:right">${d.min_qty || '—'}</td>
+                <td style="padding:8px 10px;border-top:1px solid var(--line)">${App.esc(d.category || '—')}</td>
               </tr>`).join('')}
           </tbody>
         </table>
