@@ -1011,12 +1011,12 @@ ${info && info.note ? `<div class="note-box">หมายเหตุ: ${esc(inf
           <button class="btn-ghost ur-preset" data-f="${prev6}" data-t="${lastDay}" style="width:auto;padding:7px 13px;font-size:.85rem">6 เดือน</button>
           <button class="btn-ghost ur-preset" data-f="${yearStart}" data-t="${lastDay}" style="width:auto;padding:7px 13px;font-size:.85rem">ปีนี้</button>
         </div>
-        <div class="d-flex gap-2 align-items-center">
+        <div class="d-flex gap-2 align-items-center" style="margin-bottom:10px">
           <input type="date" id="urFrom" value="${firstDay}" class="ur-date flex-fill">
           <span style="color:var(--muted);flex:none">ถึง</span>
           <input type="date" id="urTo" value="${lastDay}" class="ur-date flex-fill">
-          <button id="urRun" class="btn-brand" style="width:auto;padding:11px 18px"><i class="bi bi-bar-chart-fill"></i> ดู</button>
         </div>
+        <button id="urRun" class="btn-brand"><i class="bi bi-bar-chart-fill"></i> ดูรายงาน</button>
       </div>
       <div id="urResults" style="margin-top:16px"></div>`;
     view.querySelectorAll('.ur-preset').forEach(b => b.addEventListener('click', () => {
