@@ -122,6 +122,7 @@ function route_(action, p) {
     case 'issueSlip':        return guard_(p, ['receive'], function (u) { return apiIssueSlip_(p, u); });
     case 'getIssueSlip':     return guard_(p, ['view'],    function ()  { return apiGetIssueSlip_(p.slip_no); });
     case 'recentIssues':     return guard_(p, ['view'],    function ()  { return apiRecentIssues_(p.limit || 20); });
+    case 'searchIssueSlips': return guard_(p, ['view'],    function ()  { return apiSearchIssueSlips_(p); });
 
     // ---- Part 6: notifications + account ----
     case 'getNotifyConfig':  return guard_(p, ['*'],    function ()  { return apiGetNotifyConfig_(); });
@@ -133,8 +134,11 @@ function route_(action, p) {
     case 'exportData':       return guard_(p, ['view'], function ()  { return apiExportData_(p); });
 
     // ---- Extra: dispose / history / users ----
-    case 'disposeItem':      return guard_(p, ['receive'], function (u) { return apiDisposeItem_(p, u); });
-    case 'getHistory':       return guard_(p, ['view'],    function ()  { return apiGetHistory_(p); });
+    case 'disposeItem':          return guard_(p, ['receive'], function (u) { return apiDisposeItem_(p, u); });
+    case 'getExpiredItems':      return guard_(p, ['view'],    function ()  { return apiGetExpiredItems_(p.location_id); });
+    case 'disposeExpiredBatch':  return guard_(p, ['stock'],   function (u) { return apiDisposeExpiredBatch_(p, u); });
+    case 'usageReport':          return guard_(p, ['view'],    function ()  { return apiUsageReport_(p); });
+    case 'getHistory':           return guard_(p, ['view'],    function ()  { return apiGetHistory_(p); });
     case 'getUsers':         return guard_(p, ['*'],       function ()  { return apiGetUsers_(); });
     case 'saveUser':         return guard_(p, ['*'],       function (u) { return apiSaveUser_(p.user, u); });
     case 'deleteUser':       return guard_(p, ['*'],       function (u) { return apiDeleteUser_(p.id, u); });
@@ -1406,7 +1410,7 @@ function apiExportData_(p) {
       rows.push([it.drug_name, it.location_name, it.lot_no || '', it.expiry_date || '', daysTo_(it.expiry_date), Number(it.qty || 0), it.received_by || '', it.received_at ? localDate(it.received_at) : '']);
     });
   } else {
-    var types = (kind === 'receive') ? ['receive'] : ['receive', 'exchange', 'issue', 'dispose', 'adjust'];
+    var types = (kind === 'receive') ? ['receive'] : ['receive', 'exchange', 'issue', 'dispose', 'dispose_expired', 'adjust'];
     columns = (kind === 'receive')
       ? ['วันที่', 'เวลา', 'ยา', 'สถานที่', 'Lot No.', 'วันหมดอายุ', 'จำนวน', 'โดย']
       : ['วันที่', 'เวลา', 'ประเภท', 'ยา', 'จาก', 'ไป', 'Lot No.', 'วันหมดอายุ', 'จำนวน', 'เหตุผล', 'โดย'];
@@ -1419,7 +1423,7 @@ function apiExportData_(p) {
       if (kind === 'receive') {
         rows.push([d, tm, t.drug_name, t.to_location_name || '', t.lot_no || '', t.expiry_date || '', Number(t.qty || 0), t.by || '']);
       } else {
-        var label = t.type === 'receive' ? 'รับเข้า' : (t.type === 'exchange' ? 'ย้าย/แลก' : (t.type === 'issue' ? 'เบิก' : (t.type === 'dispose' ? 'ตัดจ่าย/ทิ้ง' : (t.type === 'adjust' ? 'ปรับยอด' : t.type))));
+        var label = t.type === 'receive' ? 'รับเข้า' : (t.type === 'exchange' ? 'ย้าย/แลก' : (t.type === 'issue' ? 'เบิก' : (t.type === 'dispose' ? 'ตัดจ่าย' : (t.type === 'dispose_expired' ? 'ตัดจ่ายหมดอายุ' : (t.type === 'adjust' ? 'ปรับยอด' : t.type)))));
         var reasonCell = t.reason || '';
         if (t.type === 'issue') {
           reasonCell = 'ผู้เบิก: ' + (t.requester || '-') + (t.department ? ' · หน่วยงาน: ' + t.department : '') + (t.note ? ' · ' + t.note : '');
@@ -1564,6 +1568,119 @@ function apiAdjustItem_(p, user) {
     return { status: 'success', message: 'ปรับยอด ' + item.drug_name + ' เป็น ' + actual };
   } catch (e) { logError_('adjustItem', e); return { status: 'error', message: 'ปรับยอดไม่สำเร็จ' }; }
   finally { try { lock.releaseLock(); } catch (_) {} }
+}
+
+// ============================================================ ISSUE HISTORY / DISPOSE EXPIRED / USAGE REPORT
+function apiSearchIssueSlips_(p) {
+  var tx = readAll_('Transactions').filter(function(t) { return t.type === 'issue'; });
+  if (p.date_from) tx = tx.filter(function(t) { return String(t.created_at || '') >= String(p.date_from); });
+  if (p.date_to)   tx = tx.filter(function(t) { return String(t.created_at || '') <= String(p.date_to) + 'T23:59:59'; });
+  var slipMap = {}, order = [];
+  tx.forEach(function(t) {
+    var key = t.slip_no || ('_' + t.id);
+    if (!slipMap[key]) {
+      slipMap[key] = { slip_no: t.slip_no || '', created_at: t.created_at,
+        requester: t.requester || '', department: t.department || '', receiver: t.receiver || '',
+        drugs: [], drug_count: 0, total_qty: 0 };
+      order.push(key);
+    }
+    var s = slipMap[key];
+    if (!s.drugs.find(function(d) { return d.drug_id === t.drug_id; })) {
+      s.drugs.push({ drug_id: t.drug_id, drug_name: t.drug_name, qty: Number(t.qty || 0) });
+      s.drug_count++;
+    }
+    s.total_qty += Number(t.qty || 0);
+  });
+  var slips = order.map(function(k) { return slipMap[k]; });
+  var q = String(p.q || '').toLowerCase().trim();
+  if (q) slips = slips.filter(function(s) {
+    return (s.slip_no + ' ' + s.requester + ' ' + s.department).toLowerCase().indexOf(q) !== -1;
+  });
+  slips.sort(function(a, b) { return String(b.created_at || '').localeCompare(String(a.created_at || '')); });
+  return { status: 'success', data: slips.slice(0, Number(p.limit || 100)) };
+}
+
+function apiGetExpiredItems_(locationId) {
+  var items = readAll_('Items').filter(function(it) {
+    var d = daysTo_(it.expiry_date);
+    return it.status === 'active' && Number(it.qty || 0) > 0 && d !== null && d < 0;
+  });
+  if (locationId && locationId !== '' && locationId !== 'all') {
+    items = items.filter(function(it) { return it.location_id === locationId; });
+  }
+  var dmap = {};
+  readAll_('Drugs').forEach(function(d) { if (d.id) dmap[d.id] = d; });
+  return {
+    status: 'success',
+    data: items.map(function(it) {
+      var drug = dmap[it.drug_id] || {};
+      return { id: it.id, drug_id: it.drug_id, drug_name: it.drug_name,
+        location_id: it.location_id, location_name: it.location_name,
+        lot_no: it.lot_no, expiry_date: it.expiry_date,
+        qty: Number(it.qty || 0), days: daysTo_(it.expiry_date),
+        unit: drug.unit || '', code: drug.code || '' };
+    })
+  };
+}
+
+function apiDisposeExpiredBatch_(p, user) {
+  var lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(15000);
+    var items = p.items || [];
+    if (!items.length) return { status: 'error', message: 'ไม่มีรายการที่เลือก' };
+    var count = 0;
+    for (var i = 0; i < items.length; i++) {
+      var req = items[i];
+      var item = findById_('Items', req.item_id);
+      if (!item || item.status !== 'active') continue;
+      var qty = Math.min(Number(req.qty || item.qty || 0), Number(item.qty || 0));
+      if (qty <= 0) continue;
+      item.qty = Number(item.qty || 0) - qty;
+      if (item.qty <= 0) { item.qty = 0; item.status = 'disposed'; }
+      item.updated_at = now_();
+      updateRecord_('Items', item.id, item);
+      appendRecord_('Transactions', {
+        id: Utilities.getUuid(), type: 'dispose_expired', item_id: item.id,
+        drug_id: item.drug_id, drug_name: item.drug_name,
+        from_location_id: item.location_id, from_location_name: item.location_name,
+        to_location_id: '', to_location_name: '',
+        qty: qty, lot_no: item.lot_no, expiry_date: item.expiry_date,
+        reason: 'ตัดจ่ายยาหมดอายุ', note: p.note || '', approver: p.approver || '',
+        by: user.username, created_at: now_()
+      });
+      count++;
+    }
+    if (!count) return { status: 'error', message: 'ไม่มีรายการที่ตัดจ่ายได้' };
+    return { status: 'success', message: 'ตัดจ่ายยาหมดอายุแล้ว ' + count + ' รายการ', count: count };
+  } catch(e) { logError_('disposeExpiredBatch', e); return { status: 'error', message: 'ตัดจ่ายไม่สำเร็จ' }; }
+  finally { try { lock.releaseLock(); } catch(_) {} }
+}
+
+function apiUsageReport_(p) {
+  var tx = readAll_('Transactions').filter(function(t) { return t.type === 'issue'; });
+  if (p.date_from) tx = tx.filter(function(t) { return String(t.created_at || '') >= String(p.date_from); });
+  if (p.date_to)   tx = tx.filter(function(t) { return String(t.created_at || '') <= String(p.date_to) + 'T23:59:59'; });
+  var drugMap = {};
+  tx.forEach(function(t) {
+    var id = t.drug_id;
+    if (!drugMap[id]) drugMap[id] = { drug_id: id, drug_name: t.drug_name, total_qty: 0, slip_set: {}, by_dept: {} };
+    drugMap[id].total_qty += Number(t.qty || 0);
+    if (t.slip_no) drugMap[id].slip_set[t.slip_no] = true;
+    var dept = t.department || 'ไม่ระบุ';
+    drugMap[id].by_dept[dept] = (drugMap[id].by_dept[dept] || 0) + Number(t.qty || 0);
+  });
+  var dmap = {};
+  readAll_('Drugs').forEach(function(d) { if (d.id) dmap[d.id] = d; });
+  var out = Object.keys(drugMap).map(function(id) {
+    var d = drugMap[id]; var drug = dmap[id] || {};
+    var depts = Object.keys(d.by_dept).map(function(k) { return { dept: k, qty: d.by_dept[k] }; });
+    depts.sort(function(a, b) { return b.qty - a.qty; });
+    return { drug_id: id, drug_name: d.drug_name, unit: drug.unit || '', code: drug.code || '',
+      total_qty: d.total_qty, slip_count: Object.keys(d.slip_set).length, by_dept: depts };
+  });
+  out.sort(function(a, b) { return b.total_qty - a.total_qty; });
+  return { status: 'success', data: out, tx_count: tx.length };
 }
 
 // ============================================================ UTIL

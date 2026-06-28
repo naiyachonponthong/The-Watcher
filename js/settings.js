@@ -93,6 +93,21 @@ const Settings = {
         <i class="bi bi-chevron-right mi-arrow"></i>
       </button>` : ''}
 
+      ${(App.user && (App.user.permissions || []).some(x => x === '*' || x === 'stock')) ? `
+      <button class="menu-item" data-act="disposeExp">
+        <div class="mi-icon c-coral"><i class="bi bi-trash3-fill"></i></div>
+        <div class="mi-body"><div class="mi-title">ตัดจ่ายยาหมดอายุ</div>
+          <div class="mi-desc">บันทึกการทำลาย พร้อมพิมพ์ใบบันทึก</div></div>
+        <i class="bi bi-chevron-right mi-arrow"></i>
+      </button>` : ''}
+
+      <button class="menu-item" data-act="usageRpt">
+        <div class="mi-icon c-teal"><i class="bi bi-bar-chart-fill"></i></div>
+        <div class="mi-body"><div class="mi-title">รายงานการใช้ยา</div>
+          <div class="mi-desc">สรุปยาที่เบิกไปตามช่วงเวลา</div></div>
+        <i class="bi bi-chevron-right mi-arrow"></i>
+      </button>
+
       <button class="menu-item" data-act="display">
         <div class="mi-icon c-violet"><i class="bi bi-palette-fill"></i></div>
         <div class="mi-body"><div class="mi-title">การแสดงผล</div>
@@ -128,6 +143,8 @@ const Settings = {
         else if (act === 'report') this.report(view);
         else if (act === 'issueform') this.issueSettings(view);
         else if (act === 'audit') this.audit(view);
+        else if (act === 'disposeExp') this.disposeExpired(view);
+        else if (act === 'usageRpt') this.usageReport(view);
         else if (act === 'display') this.display(view);
         else if (act === 'users') this.users(view);
         else App.toast('ส่วนนี้จะมาในพาร์ทถัดไป');
@@ -526,11 +543,12 @@ const Settings = {
 
   histRow(t) {
     const meta = {
-      receive: { ic: 'bi-box-arrow-in-down', c: 'var(--brand-strong)', label: 'รับเข้า' },
-      exchange: { ic: 'bi-arrow-left-right', c: '#2563eb', label: 'ย้าย' },
-      issue: { ic: 'bi-box-arrow-right', c: 'var(--danger)', label: 'เบิก' },
-      dispose: { ic: 'bi-dash-circle', c: 'var(--danger)', label: 'ตัดจ่าย' },
-      adjust: { ic: 'bi-sliders', c: '#8b5cf6', label: 'ปรับยอด' }
+      receive:         { ic: 'bi-box-arrow-in-down',  c: 'var(--brand-strong)', label: 'รับเข้า' },
+      exchange:        { ic: 'bi-arrow-left-right',    c: '#2563eb',             label: 'ย้าย' },
+      issue:           { ic: 'bi-box-arrow-right',     c: 'var(--danger)',       label: 'เบิก' },
+      dispose:         { ic: 'bi-dash-circle',         c: 'var(--danger)',       label: 'ตัดจ่าย' },
+      dispose_expired: { ic: 'bi-trash3',              c: 'var(--danger)',       label: 'ตัดจ่ายหมดอายุ' },
+      adjust:          { ic: 'bi-sliders',             c: '#8b5cf6',             label: 'ปรับยอด' }
     }[t.type] || { ic: 'bi-dot', c: 'var(--muted)', label: t.type };
     let route = '';
     if (t.type === 'receive') route = '→ ' + App.esc(t.to_location_name || '');
@@ -830,6 +848,257 @@ td{padding:5px;border:1px solid #ccc;vertical-align:middle;line-height:1.4}
     w.document.write(html);
     w.document.close();
     setTimeout(() => w.print(), 500);
+  },
+
+  /* ---------- ตัดจ่ายยาหมดอายุ ---------- */
+  async disposeExpired(view) {
+    view.innerHTML = `${this.back()}<div class="page-title">ตัดจ่ายยาหมดอายุ</div>
+      <div class="page-sub">เลือกสถานที่ ตรวจสอบรายการ แล้วบันทึกพร้อมพิมพ์ใบบันทึก</div>
+      <div class="field"><label>สถานที่</label>
+        <select id="dpLoc">
+          <option value="">กำลังโหลด...</option>
+        </select>
+      </div>
+      <div id="dpItems"></div>
+      <div id="dpActions" class="d-none">
+        <div class="field"><label>ผู้อนุมัติ / หัวหน้างาน</label>
+          <input type="text" id="dpApprover" placeholder="ชื่อผู้อนุมัติ"></div>
+        <div class="field"><label>หมายเหตุ (ถ้ามี)</label>
+          <input type="text" id="dpNote" placeholder="เช่น นำทำลายตามระเบียบ"></div>
+        <button id="dpConfirm" class="btn-brand">
+          <i class="bi bi-trash3-fill"></i> บันทึกตัดจ่ายและพิมพ์ใบบันทึก
+        </button>
+      </div>`;
+    const rl = await api('getLocations').catch(() => null);
+    const locs = ((rl && rl.data) || []).sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+    const sel = document.getElementById('dpLoc');
+    sel.innerHTML = '<option value="">เลือกสถานที่</option>'
+      + '<option value="all">ทุกสถานที่</option>'
+      + locs.map(l => `<option value="${l.id}">${App.esc(l.name)}</option>`).join('');
+    sel.addEventListener('change', () => this.disposeExpiredLoad(sel.value, locs.find(l => l.id === sel.value)));
+  },
+
+  async disposeExpiredLoad(locId, loc) {
+    const wrap    = document.getElementById('dpItems');
+    const actions = document.getElementById('dpActions');
+    if (!locId) { wrap.innerHTML = ''; actions.classList.add('d-none'); return; }
+    wrap.innerHTML = App.loader(); actions.classList.add('d-none');
+    const locParam = (locId === 'all') ? '' : locId;
+    const r = await api('getExpiredItems', { location_id: locParam }).catch(() => null);
+    const list = (r && r.data) || [];
+    if (!list.length) {
+      wrap.innerHTML = `<div class="empty-state"><i class="bi bi-check-circle" style="font-size:2.5rem;color:var(--teal)"></i>
+        <div class="es-title">ไม่มียาหมดอายุในจุดนี้ 🎉</div></div>`;
+      return;
+    }
+    wrap.innerHTML = `
+      <div class="dp-select-all">
+        <label class="dp-check-lbl"><input type="checkbox" id="dpSelectAll" checked> เลือกทั้งหมด (${list.length} รายการ)</label>
+      </div>
+      ${list.map(it => `
+      <div class="dp-row">
+        <label class="dp-check-lbl">
+          <input type="checkbox" class="dp-chk" data-id="${it.id}" checked>
+          <div>
+            <div class="dp-name">${App.esc(it.drug_name)}</div>
+            <div class="dp-meta">
+              ${it.lot_no ? `Lot ${App.esc(it.lot_no)} · ` : ''}${fmtDate(it.expiry_date)}
+              · มี <strong>${it.qty}</strong>${it.unit ? ' ' + App.esc(it.unit) : ''}
+              ${locId === 'all' ? ' · ' + App.esc(it.location_name || '') : ''}
+            </div>
+          </div>
+        </label>
+        <input type="number" class="dp-qty" data-id="${it.id}" value="${it.qty}" min="1" max="${it.qty}">
+      </div>`).join('')}`;
+    actions.classList.remove('d-none');
+    document.getElementById('dpSelectAll').addEventListener('change', e => {
+      wrap.querySelectorAll('.dp-chk').forEach(c => c.checked = e.target.checked);
+    });
+    document.getElementById('dpConfirm').onclick = async () => {
+      const checked = [...wrap.querySelectorAll('.dp-chk:checked')].map(c => {
+        const qtyEl = wrap.querySelector(`.dp-qty[data-id="${c.dataset.id}"]`);
+        return { item_id: c.dataset.id, qty: parseInt(qtyEl ? qtyEl.value : 0) || 0 };
+      }).filter(x => x.qty > 0);
+      if (!checked.length) { App.toast('ยังไม่ได้เลือกรายการ', 'err'); return; }
+      const btn = document.getElementById('dpConfirm');
+      btn.disabled = true; btn.innerHTML = '<span class="spin"></span>';
+      const res = await api('disposeExpiredBatch', {
+        items: checked,
+        approver: document.getElementById('dpApprover').value.trim(),
+        note:     document.getElementById('dpNote').value.trim()
+      }).catch(() => null);
+      btn.disabled = false; btn.innerHTML = '<i class="bi bi-trash3-fill"></i> บันทึกตัดจ่ายและพิมพ์ใบบันทึก';
+      if (res && res.status === 'success') {
+        App.toast(res.message, 'ok');
+        const dispItems = checked.map(c => {
+          const it = list.find(x => x.id === c.item_id);
+          return it ? Object.assign({}, it, { qty: c.qty }) : null;
+        }).filter(Boolean);
+        this.disposeExpiredPrint(loc ? loc.name : locId, dispItems, {
+          approver: document.getElementById('dpApprover').value.trim(),
+          note:     document.getElementById('dpNote').value.trim()
+        });
+        this.disposeExpiredLoad(locId, loc);
+      } else App.toast((res && res.message) || 'ไม่สำเร็จ', 'err');
+    };
+  },
+
+  disposeExpiredPrint(locName, items, info) {
+    const hospital = (App.branding && App.branding.hospital_name) || '';
+    const today = new Date();
+    const beYear = today.getFullYear() + (App.beYear ? 543 : 0);
+    const months = ['มกราคม','กุมภาพันธ์','มีนาคม','เมษายน','พฤษภาคม','มิถุนายน','กรกฎาคม','สิงหาคม','กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'];
+    const dateStr = `${today.getDate()} ${months[today.getMonth()]} ${beYear}`;
+    const esc = s => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    const rows = items.map((it, i) => `<tr>
+      <td style="text-align:center">${i + 1}</td>
+      <td>${esc(it.drug_name)}</td>
+      <td style="text-align:center">${esc(it.lot_no || '-')}</td>
+      <td style="text-align:center">${esc(fmtDate(it.expiry_date))}</td>
+      <td style="text-align:center">${esc(it.unit || '')}</td>
+      <td style="text-align:center">${it.qty}</td>
+      <td>${esc(it.location_name || locName)}</td>
+      <td></td>
+    </tr>`).join('');
+    const pad = Math.max(0, 12 - items.length);
+    const empty = pad > 0 ? Array(pad).fill('<tr><td>&nbsp;</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>').join('') : '';
+    const html = `<!DOCTYPE html><html lang="th"><head><meta charset="utf-8">
+<title>ใบบันทึกการตัดจ่ายยาหมดอายุ</title>
+<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}body{font-family:'Sarabun',sans-serif;font-size:13px;color:#000;background:#fff;padding:16mm 14mm}
+h1{font-size:17px;font-weight:700;text-align:center;margin-bottom:3px}.hsub{text-align:center;color:#555;margin-bottom:14px}
+.info-row{display:flex;justify-content:space-between;margin-bottom:10px}.note-box{border:1px solid #ccc;border-radius:4px;padding:8px 12px;margin-bottom:14px}
+table{width:100%;border-collapse:collapse;margin-bottom:16px;font-size:12px}
+th{background:#b71c1c;color:#fff;padding:6px 5px;text-align:center;font-weight:600;border:1px solid #999}td{padding:5px;border:1px solid #ccc;vertical-align:middle}
+.sig-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:24px;margin-top:28px}
+.sig-block{border-top:1px solid #000;padding-top:8px;text-align:center;font-size:12px}.sig-title{margin-bottom:48px;color:#555}
+@media print{@page{size:A4;margin:12mm 10mm}body{padding:0}}
+</style></head><body>
+<h1>ใบบันทึกการตัดจ่ายยาหมดอายุ</h1>
+<div class="hsub">${esc(hospital)}</div>
+<div class="info-row"><span>สถานที่: <strong>${esc(locName)}</strong></span><span>วันที่: <strong>${dateStr}</strong></span><span>ทั้งหมด: <strong>${items.length} รายการ</strong></span></div>
+${info && info.note ? `<div class="note-box">หมายเหตุ: ${esc(info.note)}</div>` : ''}
+<table><thead><tr>
+  <th style="width:5%">ลำดับ</th><th style="width:28%">ชื่อยา / เวชภัณฑ์</th>
+  <th style="width:13%">Lot No.</th><th style="width:14%">วันหมดอายุ</th>
+  <th style="width:7%">หน่วย</th><th style="width:10%">จำนวน</th>
+  <th style="width:13%">สถานที่</th><th style="width:10%">หมายเหตุ</th>
+</tr></thead><tbody>${rows}${empty}</tbody></table>
+<div class="sig-grid">
+  <div class="sig-block"><div class="sig-title">ผู้ตัดจ่าย</div>ลงชื่อ ________________________________<br>ตำแหน่ง ___________________________</div>
+  <div class="sig-block"><div class="sig-title">ผู้ตรวจสอบ</div>ลงชื่อ ________________________________<br>ตำแหน่ง ___________________________</div>
+  <div class="sig-block"><div class="sig-title">ผู้อนุมัติ${info && info.approver ? ': ' + esc(info.approver) : ''}</div>ลงชื่อ ________________________________<br>ตำแหน่ง ___________________________</div>
+</div></body></html>`;
+    const w = window.open('', '_blank'); w.document.write(html); w.document.close(); setTimeout(() => w.print(), 500);
+  },
+
+  /* ---------- รายงานการใช้ยา ---------- */
+  async usageReport(view) {
+    const now = new Date();
+    const y = now.getFullYear(), m = now.getMonth();
+    const firstDay = new Date(y, m, 1).toISOString().slice(0, 10);
+    const lastDay  = new Date(y, m + 1, 0).toISOString().slice(0, 10);
+    const prev3    = new Date(y, m - 2, 1).toISOString().slice(0, 10);
+    const prev6    = new Date(y, m - 5, 1).toISOString().slice(0, 10);
+    const yearStart = `${y}-01-01`;
+    view.innerHTML = `${this.back()}<div class="page-title">รายงานการใช้ยา</div>
+      <div class="page-sub">สรุปยาที่เบิกไปในช่วงเวลาที่เลือก เรียงจากมากไปน้อย</div>
+      <div class="card-soft" style="padding:14px 16px">
+        <div class="d-flex gap-2 flex-wrap" style="margin-bottom:10px">
+          <button class="btn-ghost ur-preset" data-f="${firstDay}" data-t="${lastDay}" style="width:auto;padding:7px 13px;font-size:.85rem">เดือนนี้</button>
+          <button class="btn-ghost ur-preset" data-f="${prev3}" data-t="${lastDay}" style="width:auto;padding:7px 13px;font-size:.85rem">3 เดือน</button>
+          <button class="btn-ghost ur-preset" data-f="${prev6}" data-t="${lastDay}" style="width:auto;padding:7px 13px;font-size:.85rem">6 เดือน</button>
+          <button class="btn-ghost ur-preset" data-f="${yearStart}" data-t="${lastDay}" style="width:auto;padding:7px 13px;font-size:.85rem">ปีนี้</button>
+        </div>
+        <div class="d-flex gap-2 align-items-center">
+          <input type="date" id="urFrom" value="${firstDay}" class="ur-date flex-fill">
+          <span style="color:var(--muted);flex:none">ถึง</span>
+          <input type="date" id="urTo" value="${lastDay}" class="ur-date flex-fill">
+          <button id="urRun" class="btn-brand" style="width:auto;padding:11px 18px"><i class="bi bi-bar-chart-fill"></i> ดู</button>
+        </div>
+      </div>
+      <div id="urResults" style="margin-top:16px"></div>`;
+    view.querySelectorAll('.ur-preset').forEach(b => b.addEventListener('click', () => {
+      document.getElementById('urFrom').value = b.dataset.f;
+      document.getElementById('urTo').value   = b.dataset.t;
+      this.runUsageReport();
+    }));
+    document.getElementById('urRun').addEventListener('click', () => this.runUsageReport());
+    this.runUsageReport();
+  },
+
+  async runUsageReport() {
+    const from = document.getElementById('urFrom').value;
+    const to   = document.getElementById('urTo').value;
+    const wrap = document.getElementById('urResults');
+    if (!from || !to) { App.toast('เลือกช่วงวันที่', 'err'); return; }
+    wrap.innerHTML = App.loader();
+    const r = await api('usageReport', { date_from: from, date_to: to }).catch(() => null);
+    const list = (r && r.data) || [];
+    if (!list.length) { wrap.innerHTML = '<div class="empty-state"><div class="es-title">ไม่มีการเบิกในช่วงนี้</div></div>'; return; }
+    const deptTotals = {};
+    list.forEach(d => d.by_dept.forEach(bd => { deptTotals[bd.dept] = (deptTotals[bd.dept] || 0) + bd.qty; }));
+    const depts = Object.keys(deptTotals).sort((a, b) => deptTotals[b] - deptTotals[a]).slice(0, 5);
+    this._urData = { list, depts, from, to, tx_count: r.tx_count || 0 };
+    wrap.innerHTML = `
+      <div class="ur-meta">พบ <strong>${list.length}</strong> รายการ · ${r.tx_count || 0} รายการเบิก</div>
+      <button id="urPrint" class="btn-ghost" style="width:auto;margin-bottom:12px"><i class="bi bi-printer"></i> พิมพ์รายงาน</button>
+      <div class="ur-table-wrap"><table class="ur-table">
+        <thead><tr>
+          <th>#</th><th>ชื่อยา / เวชภัณฑ์</th><th>หน่วย</th><th>รวมเบิก</th><th>ใบเบิก</th>
+          ${depts.map(d => `<th>${App.esc(d)}</th>`).join('')}
+        </tr></thead>
+        <tbody>${list.map((it, i) => `<tr>
+          <td class="urt-n">${i + 1}</td>
+          <td>${App.esc(it.drug_name)}</td>
+          <td class="urt-c">${App.esc(it.unit)}</td>
+          <td class="urt-c urt-bold">${it.total_qty}</td>
+          <td class="urt-c">${it.slip_count}</td>
+          ${depts.map(d => { const bd = it.by_dept.find(x => x.dept === d); return `<td class="urt-c">${bd ? bd.qty : '-'}</td>`; }).join('')}
+        </tr>`).join('')}</tbody>
+      </table></div>`;
+    document.getElementById('urPrint').onclick = () => this.printUsageReport(this._urData);
+  },
+
+  printUsageReport({ list, depts, from, to, tx_count }) {
+    const hospital = (App.branding && App.branding.hospital_name) || '';
+    const esc = s => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    const rows = list.map((it, i) => `<tr ${i % 2 === 1 ? 'style="background:#f8f8ff"' : ''}>
+      <td style="text-align:center">${i + 1}</td><td>${esc(it.drug_name)}</td>
+      <td style="text-align:center">${esc(it.unit)}</td>
+      <td style="text-align:center;font-weight:600">${it.total_qty}</td>
+      <td style="text-align:center">${it.slip_count}</td>
+      ${(depts || []).map(d => { const bd = it.by_dept.find(x => x.dept === d); return `<td style="text-align:center">${bd ? bd.qty : '-'}</td>`; }).join('')}
+    </tr>`).join('');
+    const html = `<!DOCTYPE html><html lang="th"><head><meta charset="utf-8">
+<title>รายงานการใช้ยา</title>
+<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}body{font-family:'Sarabun',sans-serif;font-size:13px;color:#000;background:#fff;padding:14mm 12mm}
+h1{font-size:17px;font-weight:700;text-align:center;margin-bottom:3px}.hsub{text-align:center;color:#555;margin-bottom:14px}
+.info-row{display:flex;justify-content:space-between;margin-bottom:12px}
+table{width:100%;border-collapse:collapse;margin-bottom:18px;font-size:12px}
+th{background:#1a237e;color:#fff;padding:6px 5px;text-align:center;font-weight:600;border:1px solid #999}td{padding:5px;border:1px solid #ccc;vertical-align:middle}
+.sig-row{display:flex;gap:28px;margin-top:28px}.sig-block{flex:1;border-top:1px solid #000;padding-top:8px;text-align:center;font-size:12px}
+@media print{@page{size:A4 landscape;margin:10mm 12mm}body{padding:0}}
+</style></head><body>
+<h1>รายงานการใช้ยา</h1><div class="hsub">${esc(hospital)}</div>
+<div class="info-row">
+  <span>ช่วงเวลา: <strong>${from}</strong> ถึง <strong>${to}</strong></span>
+  <span>รายการ: <strong>${list.length}</strong> · ใบเบิก: <strong>${tx_count}</strong></span>
+</div>
+<table><thead><tr>
+  <th style="width:4%">#</th><th style="width:30%">ชื่อยา / เวชภัณฑ์</th>
+  <th style="width:7%">หน่วย</th><th style="width:8%">รวมเบิก</th><th style="width:8%">ใบเบิก</th>
+  ${(depts || []).map(d => `<th>${esc(d)}</th>`).join('')}
+</tr></thead><tbody>${rows}</tbody></table>
+<div class="sig-row">
+  <div class="sig-block">ผู้จัดทำ<br><br><br>ลงชื่อ ____________________________</div>
+  <div class="sig-block">ผู้ตรวจสอบ<br><br><br>ลงชื่อ ____________________________</div>
+  <div class="sig-block">ผู้อนุมัติ<br><br><br>ลงชื่อ ____________________________</div>
+</div></body></html>`;
+    const w = window.open('', '_blank'); w.document.write(html); w.document.close(); setTimeout(() => w.print(), 500);
   },
 
   /* ---------- ตั้งค่าใบเบิก (หัวกระดาษ + ผู้ลงนาม) ---------- */

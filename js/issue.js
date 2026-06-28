@@ -43,7 +43,22 @@ const Issue = {
       </div>
 
       <div class="section-label">เบิกล่าสุด</div>
-      <div id="isRecent">${this._recent.length ? this.recentHtml() : '<div class="hint">ยังไม่มีรายการ</div>'}</div>`;
+      <div id="isRecent">${this._recent.length ? this.recentHtml() : '<div class="hint">ยังไม่มีรายการ</div>'}</div>
+
+      <div class="section-label" style="margin-top:28px">ค้นหาประวัติใบเบิก</div>
+      <div class="card-soft" style="padding:14px 16px">
+        <div class="search-wrap" style="margin-bottom:8px">
+          <i class="bi bi-search"></i>
+          <input id="isHistQ" autocomplete="off" placeholder="เลขที่ใบเบิก, ชื่อผู้เบิก, หน่วยงาน">
+        </div>
+        <div class="d-flex gap-2 align-items-center">
+          <input type="date" id="isHistFrom" class="date-inp flex-fill">
+          <span style="color:var(--muted);flex:none">ถึง</span>
+          <input type="date" id="isHistTo" class="date-inp flex-fill">
+          <button id="isHistBtn" class="btn-ghost" style="width:auto;padding:10px 14px;flex:none"><i class="bi bi-search"></i></button>
+        </div>
+      </div>
+      <div id="isHistResults"></div>`;
 
     const input = document.getElementById('isSearch');
     input.addEventListener('input', () => {
@@ -56,6 +71,11 @@ const Issue = {
     document.getElementById('isConfirm').addEventListener('click', (e) => this.confirm(e.currentTarget));
     this.bindRecent();
     this.renderCart();
+
+    const histBtn = document.getElementById('isHistBtn');
+    const histQ   = document.getElementById('isHistQ');
+    if (histBtn) histBtn.addEventListener('click', () => this.searchHistory());
+    if (histQ)   histQ.addEventListener('keydown', e => { if (e.key === 'Enter') this.searchHistory(); });
   },
 
   async search(q) {
@@ -220,6 +240,37 @@ const Issue = {
 
   bindRecent() {
     document.querySelectorAll('#isRecent .is-print').forEach(b =>
+      b.addEventListener('click', () => this.printSlip(b.dataset.slip)));
+  },
+
+  async searchHistory() {
+    const q    = (document.getElementById('isHistQ')    || {}).value?.trim() || '';
+    const from = (document.getElementById('isHistFrom') || {}).value || '';
+    const to   = (document.getElementById('isHistTo')   || {}).value || '';
+    const wrap = document.getElementById('isHistResults');
+    if (!q && !from && !to) { App.toast('กรอกคำค้นหา หรือเลือกช่วงวันที่', 'err'); return; }
+    wrap.innerHTML = App.loader();
+    const r = await api('searchIssueSlips', { q, date_from: from, date_to: to, limit: 100 }).catch(() => null);
+    const slips = (r && r.data) || [];
+    if (!slips.length) { wrap.innerHTML = '<div class="hint" style="padding:10px 4px">ไม่พบใบเบิกที่ตรงกัน</div>'; return; }
+    wrap.innerHTML = slips.map(s => {
+      const names = s.drugs.slice(0, 2).map(d => App.esc(d.drug_name)).join(', ')
+        + (s.drugs.length > 2 ? ` +${s.drugs.length - 2}` : '');
+      const when = s.created_at
+        ? new Date(s.created_at).toLocaleString('th-TH', { day: '2-digit', month: 'short', year: '2-digit', hour: '2-digit', minute: '2-digit' })
+        : '';
+      const sub = [s.requester, s.department, when].filter(Boolean).map(App.esc).join(' · ');
+      return `<div class="issue-row">
+        <div class="ir-ic"><i class="bi bi-box-arrow-right"></i></div>
+        <div class="ir-body">
+          <div class="ir-title">${s.slip_no ? 'เลขที่ ' + App.esc(s.slip_no) : 'ใบเบิก'} <span class="ir-count">${s.drug_count} รายการ</span></div>
+          <div class="ir-sub">${names}</div>
+          <div class="ir-sub">${sub}</div>
+        </div>
+        ${s.slip_no ? `<button class="ir-print is-hist-print" data-slip="${App.esc(s.slip_no)}" aria-label="พิมพ์"><i class="bi bi-printer"></i></button>` : ''}
+      </div>`;
+    }).join('');
+    wrap.querySelectorAll('.is-hist-print').forEach(b =>
       b.addEventListener('click', () => this.printSlip(b.dataset.slip)));
   },
 

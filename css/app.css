@@ -723,4 +723,47 @@ body {
 
 #adActions { display:flex; flex-direction:column; gap:10px; margin-top:20px; }
 
+/* ── ค้นหาประวัติใบเบิก (issue.js) ── */
+.date-inp {
+  padding:10px 12px; border:1px solid var(--line); border-radius:var(--r-btn);
+  background:var(--card); color:var(--ink); font-family:inherit; font-size:.9rem;
+}
+.date-inp:focus { border-color:var(--brand); outline:none; }
+
+/* ── ตัดจ่ายยาหมดอายุ ── */
+.dp-select-all { padding:10px 14px; background:var(--brand-soft); border-radius:12px; margin-bottom:10px; }
+.dp-check-lbl { display:flex; align-items:flex-start; gap:10px; cursor:pointer; width:100%; }
+.dp-check-lbl input[type=checkbox] { width:18px; height:18px; flex:none; margin-top:2px; accent-color:var(--brand); }
+.dp-row {
+  display:flex; align-items:center; justify-content:space-between; gap:10px;
+  background:var(--card); border:1.5px solid var(--line); border-radius:12px;
+  padding:11px 14px; margin-bottom:8px;
+}
+.dp-row:has(.dp-chk:checked) { border-color:oklch(0.82 0.12 18); background:oklch(0.985 0.015 18); }
+.dp-name { font-weight:600; font-size:.93rem; }
+.dp-meta { font-size:.8rem; color:var(--muted); margin-top:2px; }
+.dp-qty {
+  width:80px; padding:6px 8px; border:1px solid var(--line); border-radius:8px;
+  font-family:inherit; font-size:.9rem; background:var(--bg); color:var(--ink); text-align:center; flex:none;
+}
+
+/* ── รายงานการใช้ยา ── */
+.ur-meta { font-size:.88rem; color:var(--muted); margin-bottom:10px; }
+.ur-date {
+  padding:10px 12px; border:1px solid var(--line); border-radius:var(--r-btn);
+  background:var(--card); color:var(--ink); font-family:inherit; font-size:.9rem;
+}
+.ur-date:focus { border-color:var(--brand); outline:none; }
+.ur-table-wrap { overflow-x:auto; -webkit-overflow-scrolling:touch; }
+.ur-table { width:100%; border-collapse:collapse; font-size:.88rem; min-width:460px; }
+.ur-table th {
+  background:var(--brand); color:#fff; padding:8px 8px; text-align:center;
+  font-weight:600; border:1px solid oklch(0.46 0.18 283);
+}
+.ur-table td { padding:7px 8px; border:1px solid var(--line); vertical-align:middle; }
+.ur-table tr:nth-child(even) td { background:var(--brand-soft); }
+.urt-n { text-align:center; color:var(--muted); }
+.urt-c { text-align:center; }
+.urt-bold { font-weight:700; color:var(--brand-strong); }
+
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
