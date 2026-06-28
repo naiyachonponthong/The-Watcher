@@ -911,11 +911,15 @@ function apiGetLocationItems_(locationId) {
     items = items.filter(function (it) { return it.location_id === locationId; });
   }
   var imgMap = buildDrugImageMap_();
+  var dmap = {};
+  readAll_('Drugs').forEach(function (d) { if (d.id) dmap[d.id] = d; });
   var out = items.map(function (it) {
+    var drug = dmap[it.drug_id] || {};
     return {
       id: it.id, drug_id: it.drug_id, drug_name: it.drug_name, image_url: imgMap[it.drug_id] || '',
       location_id: it.location_id, location_name: it.location_name,
-      lot_no: it.lot_no, expiry_date: it.expiry_date, qty: Number(it.qty || 0), days: daysTo_(it.expiry_date)
+      lot_no: it.lot_no, expiry_date: it.expiry_date, qty: Number(it.qty || 0), days: daysTo_(it.expiry_date),
+      unit: drug.unit || '', code: drug.code || ''
     };
   });
   out.sort(function (a, b) { return (a.days == null ? 1e9 : a.days) - (b.days == null ? 1e9 : b.days); });

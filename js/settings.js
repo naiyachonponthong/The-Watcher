@@ -88,8 +88,8 @@ const Settings = {
       ${(App.user && (App.user.permissions || []).some(x => x === '*' || x === 'stock')) ? `
       <button class="menu-item" data-act="audit">
         <div class="mi-icon c-teal"><i class="bi bi-clipboard-check-fill"></i></div>
-        <div class="mi-body"><div class="mi-title">ตรวจนับสต็อก</div>
-          <div class="mi-desc">นับของจริงแล้วปรับยอดให้ตรง</div></div>
+        <div class="mi-body"><div class="mi-title">ตรวจนับสต็อก / วันหมดอายุ</div>
+          <div class="mi-desc">เช็คของจริง เทียบระบบ และพิมพ์รายงาน</div></div>
         <i class="bi bi-chevron-right mi-arrow"></i>
       </button>` : ''}
 
@@ -641,47 +641,195 @@ const Settings = {
     });
   },
 
-  /* ---------- ตรวจนับสต็อก ---------- */
+  /* ---------- ตรวจนับสต็อก / เช็ควันหมดอายุ ---------- */
   async audit(view) {
-    view.innerHTML = `${this.back()}<div class="page-title">ตรวจนับสต็อก</div>
-      <div class="page-sub">เลือกสถานที่ แล้วกรอกจำนวนที่นับได้จริง</div>
+    view.innerHTML = `${this.back()}<div class="page-title">ตรวจนับสต็อก / วันหมดอายุ</div>
+      <div class="page-sub">เลือกสถานที่ กรอกจำนวนที่นับจริง แล้วพิมพ์รายงาน</div>
       <div class="field"><label>สถานที่</label><select id="adLoc"><option value="">กำลังโหลด...</option></select></div>
-      <div id="adItems"></div>`;
+      <div id="adSummary"></div>
+      <div id="adItems"></div>
+      <div id="adActions" class="d-none">
+        <button id="adSaveAll" class="btn-ghost" style="width:auto"><i class="bi bi-floppy-fill"></i> บันทึกทั้งหมด</button>
+        <button id="adPrint" class="btn-brand" style="margin-top:10px"><i class="bi bi-printer-fill"></i> พิมพ์รายงาน</button>
+      </div>`;
     const rl = await api('getLocations').catch(() => null);
     const locs = ((rl && rl.data) || []).sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
     const sel = document.getElementById('adLoc');
     sel.innerHTML = '<option value="">เลือกสถานที่</option>' + locs.map(l => `<option value="${l.id}">${App.esc(l.name)}</option>`).join('');
-    sel.addEventListener('change', () => this.auditLoad(sel.value));
+    sel.addEventListener('change', () => this.auditLoad(sel.value, locs.find(l => l.id === sel.value)));
   },
 
-  async auditLoad(locId) {
+  async auditLoad(locId, loc) {
     const wrap = document.getElementById('adItems');
-    if (!locId) { wrap.innerHTML = ''; return; }
-    wrap.innerHTML = App.loader();
+    const summary = document.getElementById('adSummary');
+    const actions = document.getElementById('adActions');
+    if (!locId) { wrap.innerHTML = ''; summary.innerHTML = ''; actions.classList.add('d-none'); return; }
+    wrap.innerHTML = App.loader(); summary.innerHTML = ''; actions.classList.add('d-none');
+
     const r = await api('getLocationItems', { location_id: locId }).catch(() => null);
     const list = (r && r.data) || [];
     if (!list.length) { wrap.innerHTML = '<div class="empty-state"><div class="es-title">ไม่มียาในจุดนี้</div></div>'; return; }
-    wrap.innerHTML = list.map(it => `
-      <div class="card-soft" style="padding:12px 14px;margin-bottom:10px">
-        <div style="font-weight:600">${App.esc(it.drug_name)}</div>
-        <div class="hint" style="margin:2px 0 8px">${it.lot_no ? 'Lot ' + App.esc(it.lot_no) + ' · ' : ''}ระบบมี ${it.qty}${it.expiry_date ? ' · หมดอายุ ' + fmtDate(it.expiry_date) : ''}</div>
-        <div class="d-flex align-items-center gap-2">
-          <input type="number" class="ad-count" data-id="${it.id}" min="0" placeholder="นับจริง" style="max-width:140px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;font-family:inherit;background:var(--card);color:var(--ink)">
-          <button class="btn-ghost ad-save" data-id="${it.id}" style="width:auto">บันทึก</button>
+
+    const thr = App.thresholds || { critical: 35, high: 60, medium: 120 };
+    const expired  = list.filter(it => it.days !== null && it.days < 0).length;
+    const critical = list.filter(it => it.days !== null && it.days >= 0 && it.days <= thr.critical).length;
+    const high     = list.filter(it => it.days !== null && it.days > thr.critical && it.days <= thr.high).length;
+    const ok       = list.filter(it => it.days === null || it.days > thr.high).length;
+
+    summary.innerHTML = `<div class="au-summary">
+      ${expired  ? `<span class="au-sum-chip au-s-expired"><i class="bi bi-x-circle-fill"></i> หมดอายุ ${expired} รายการ</span>` : ''}
+      ${critical ? `<span class="au-sum-chip au-s-critical"><i class="bi bi-exclamation-triangle-fill"></i> เร่งด่วน ${critical} รายการ</span>` : ''}
+      ${high     ? `<span class="au-sum-chip au-s-high"><i class="bi bi-clock-fill"></i> ใกล้หมด ${high} รายการ</span>` : ''}
+      <span class="au-sum-chip au-s-ok"><i class="bi bi-check-circle-fill"></i> ปกติ ${ok} รายการ</span>
+    </div>`;
+
+    wrap.innerHTML = list.map(it => {
+      const b = expiryBucket(it.days);
+      const rowCls = it.days === null ? '' : it.days < 0 ? 'au-row-expired' : it.days <= thr.critical ? 'au-row-critical' : it.days <= thr.high ? 'au-row-high' : '';
+      return `<div class="au-row ${rowCls}" data-id="${it.id}">
+        <div class="aur-top">
+          <div class="aur-name">${App.esc(it.drug_name)}</div>
+          ${it.days !== null ? `<span class="chip ${b.cls}">${b.label}</span>` : ''}
         </div>
-      </div>`).join('');
-    wrap.querySelectorAll('.ad-save').forEach(b => b.addEventListener('click', async () => {
-      const id = b.dataset.id;
+        <div class="aur-meta">
+          ${it.lot_no ? `<span>Lot&nbsp;${App.esc(it.lot_no)}</span>` : ''}
+          ${it.expiry_date ? `<span>${fmtDate(it.expiry_date)}</span>` : ''}
+          <span>ระบบมี <strong>${it.qty}</strong>${it.unit ? '&nbsp;' + App.esc(it.unit) : ''}</span>
+        </div>
+        <div class="aur-count">
+          <input type="number" class="ad-count" data-id="${it.id}" min="0" placeholder="จำนวนที่นับจริง">
+          <button class="btn-ghost ad-save" data-id="${it.id}" style="width:auto;padding:8px 14px">บันทึก</button>
+        </div>
+      </div>`;
+    }).join('');
+
+    actions.classList.remove('d-none');
+
+    const doSave = async (id) => {
       const inp = wrap.querySelector(`.ad-count[data-id="${id}"]`);
+      const btn = wrap.querySelector(`.ad-save[data-id="${id}"]`);
       const v = inp.value.trim();
-      if (v === '') { App.toast('กรอกจำนวนที่นับได้', 'err'); inp.focus(); return; }
+      if (v === '') { App.toast('กรอกจำนวนที่นับได้', 'err'); inp.focus(); return false; }
       const actual = parseInt(v);
-      if (isNaN(actual) || actual < 0) { App.toast('จำนวนไม่ถูกต้อง', 'err'); return; }
-      b.disabled = true; b.innerHTML = '<span class="spin"></span>';
-      const r = await api('adjustItem', { item_id: id, actual_qty: actual }).catch(() => null);
-      if (r && r.status === 'success') { App.toast(r.message || 'บันทึกแล้ว', 'ok'); b.innerHTML = '<i class="bi bi-check2"></i>'; }
-      else { b.disabled = false; b.textContent = 'บันทึก'; App.toast((r && r.message) || 'ไม่สำเร็จ', 'err'); }
-    }));
+      if (isNaN(actual) || actual < 0) { App.toast('จำนวนไม่ถูกต้อง', 'err'); return false; }
+      btn.disabled = true; btn.innerHTML = '<span class="spin"></span>';
+      const res = await api('adjustItem', { item_id: id, actual_qty: actual }).catch(() => null);
+      if (res && res.status === 'success') { App.toast(res.message || 'บันทึกแล้ว', 'ok'); btn.innerHTML = '<i class="bi bi-check2"></i>'; return true; }
+      btn.disabled = false; btn.textContent = 'บันทึก'; App.toast((res && res.message) || 'ไม่สำเร็จ', 'err'); return false;
+    };
+
+    wrap.querySelectorAll('.ad-save').forEach(b => b.addEventListener('click', () => doSave(b.dataset.id)));
+
+    document.getElementById('adSaveAll').onclick = async () => {
+      const filled = [...wrap.querySelectorAll('.ad-count')].filter(i => i.value.trim() !== '');
+      if (!filled.length) { App.toast('ยังไม่ได้กรอกจำนวน', 'err'); return; }
+      for (const inp of filled) await doSave(inp.dataset.id);
+    };
+
+    document.getElementById('adPrint').onclick = () => {
+      const withActual = list.map(it => {
+        const inp = wrap.querySelector(`.ad-count[data-id="${it.id}"]`);
+        return Object.assign({}, it, { _actual: inp ? inp.value.trim() : '' });
+      });
+      this.auditPrint(loc ? loc.name : locId, withActual);
+    };
+  },
+
+  auditPrint(locName, items) {
+    const hospital = (App.branding && App.branding.hospital_name) || '';
+    const thr = App.thresholds || { critical: 35, high: 60 };
+    const today = new Date();
+    const beYear = today.getFullYear() + (App.beYear ? 543 : 0);
+    const months = ['มกราคม','กุมภาพันธ์','มีนาคม','เมษายน','พฤษภาคม','มิถุนายน','กรกฎาคม','สิงหาคม','กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'];
+    const dateStr = `${today.getDate()} ${months[today.getMonth()]} ${beYear}`;
+    const esc = s => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+    const tableRows = items.map((it, idx) => {
+      const actual = it._actual;
+      const diff = actual !== '' ? Number(actual) - it.qty : '';
+      let rowBg = '';
+      if (it.days !== null) {
+        if (it.days < 0) rowBg = 'background:#ffe4e4;';
+        else if (it.days <= thr.critical) rowBg = 'background:#ffe8d6;';
+        else if (it.days <= thr.high)     rowBg = 'background:#fff8d6;';
+      }
+      const expiryText = it.expiry_date ? fmtDate(it.expiry_date) : '-';
+      const expiryNote = it.days !== null ? (it.days < 0 ? ' ⚠' : ` (${it.days}ว)`) : '';
+      const diffStyle  = diff !== '' ? (diff < 0 ? 'color:#c00;font-weight:bold;' : diff > 0 ? 'color:#090;' : '') : '';
+      const diffText   = diff !== '' ? (diff > 0 ? `+${diff}` : String(diff)) : '';
+      return `<tr style="${rowBg}">
+        <td style="text-align:center">${idx + 1}</td>
+        <td>${esc(it.drug_name)}</td>
+        <td style="text-align:center">${esc(it.lot_no || '-')}</td>
+        <td style="text-align:center">${esc(expiryText)}${esc(expiryNote)}</td>
+        <td style="text-align:center">${esc(it.unit || '')}</td>
+        <td style="text-align:center">${it.qty}</td>
+        <td style="text-align:center">${esc(actual)}</td>
+        <td style="text-align:center;${diffStyle}">${esc(diffText)}</td>
+        <td></td>
+      </tr>`;
+    }).join('');
+
+    const pad = Math.max(0, 15 - items.length);
+    const emptyRows = pad > 0 ? Array(pad).fill('<tr><td>&nbsp;</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>').join('') : '';
+
+    const html = `<!DOCTYPE html><html lang="th"><head><meta charset="utf-8">
+<title>รายงานตรวจนับสต็อก</title>
+<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Sarabun',sans-serif;font-size:13px;color:#000;background:#fff;padding:16mm 14mm}
+h1{font-size:17px;font-weight:700;text-align:center;margin-bottom:3px}
+.hsub{font-size:13px;text-align:center;color:#555;margin-bottom:14px}
+.info-row{display:flex;justify-content:space-between;margin-bottom:10px;font-size:13px}
+.legend{display:flex;gap:16px;margin-bottom:10px;font-size:11.5px;flex-wrap:wrap}
+.leg{display:inline-flex;align-items:center;gap:5px}
+.leg-dot{width:12px;height:12px;border-radius:2px;border:1px solid rgba(0,0,0,.12)}
+table{width:100%;border-collapse:collapse;margin-bottom:18px;font-size:12px}
+th{background:#1a237e;color:#fff;padding:6px 5px;text-align:center;font-weight:600;border:1px solid #999;font-size:12px}
+td{padding:5px;border:1px solid #ccc;vertical-align:middle;line-height:1.4}
+.sig-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:28px;margin-top:32px}
+.sig-block{border-top:1px solid #000;padding-top:8px;text-align:center;font-size:12px}
+.sig-title{margin-bottom:48px;font-size:12px;color:#555}
+@media print{@page{size:A4;margin:12mm 10mm}body{padding:0}}
+</style></head><body>
+<h1>รายงานการตรวจนับสต็อกและตรวจสอบวันหมดอายุ</h1>
+<div class="hsub">${esc(hospital)}</div>
+<div class="info-row">
+  <span>สถานที่: <strong>${esc(locName)}</strong></span>
+  <span>วันที่ตรวจ: <strong>${dateStr}</strong></span>
+  <span>ทั้งหมด: <strong>${items.length} รายการ</strong></span>
+</div>
+<div class="legend">
+  <span class="leg"><span class="leg-dot" style="background:#ffe4e4"></span>หมดอายุแล้ว</span>
+  <span class="leg"><span class="leg-dot" style="background:#ffe8d6"></span>ใกล้หมดอายุ (เร่งด่วน)</span>
+  <span class="leg"><span class="leg-dot" style="background:#fff8d6"></span>ใกล้หมดอายุ</span>
+</div>
+<table>
+<thead><tr>
+  <th style="width:5%">ลำดับ</th>
+  <th style="width:26%">ชื่อยา / เวชภัณฑ์</th>
+  <th style="width:12%">Lot No.</th>
+  <th style="width:18%">วันหมดอายุ</th>
+  <th style="width:7%">หน่วย</th>
+  <th style="width:10%">คงเหลือ<br>(ระบบ)</th>
+  <th style="width:10%">ตรวจนับ<br>จริง</th>
+  <th style="width:7%">ผลต่าง</th>
+  <th style="width:5%">หมายเหตุ</th>
+</tr></thead>
+<tbody>${tableRows}${emptyRows}</tbody>
+</table>
+<div class="sig-grid">
+  <div class="sig-block"><div class="sig-title">ผู้ตรวจนับ</div>ลงชื่อ ________________________________<br>ตำแหน่ง ___________________________</div>
+  <div class="sig-block"><div class="sig-title">ผู้ตรวจสอบ</div>ลงชื่อ ________________________________<br>ตำแหน่ง ___________________________</div>
+  <div class="sig-block"><div class="sig-title">หัวหน้างาน / ผู้บริหาร</div>ลงชื่อ ________________________________<br>ตำแหน่ง ___________________________</div>
+</div>
+</body></html>`;
+
+    const w = window.open('', '_blank');
+    w.document.write(html);
+    w.document.close();
+    setTimeout(() => w.print(), 500);
   },
 
   /* ---------- ตั้งค่าใบเบิก (หัวกระดาษ + ผู้ลงนาม) ---------- */
